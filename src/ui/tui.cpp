@@ -123,23 +123,6 @@ std::string spinner_thinking(const std::string& reasoning, long ms, int cols) {
   return s;
 }
 
-// Render the bottom input line: a ">" prompt plus the text, with a block cursor
-// (reverse video) drawn at the caret. The hardware cursor stays hidden.
-std::string input_line(const std::string& in, size_t cursor) {
-  std::string out = "> ";
-  size_t i = 0;
-  while (i < in.size()) {
-    size_t end = rune_after(in, i);
-    if (cursor == i)
-      out += "\x1b[7m" + in.substr(i, end - i) + "\x1b[27m";
-    else
-      out += in.substr(i, end - i);
-    i = end;
-  }
-  if (cursor == in.size()) out += "\x1b[7m \x1b[27m";  // caret past the last char
-  return out;
-}
-
 }  // namespace
 
 Tui::Tui(const Config& cfg, bool interactive) : cfg_(cfg), interactive_(interactive) {
@@ -420,13 +403,36 @@ void Tui::redraw() {
     if (!tr.empty() && !tr.back().empty()) tr.push_back("");
     tr.push_back(status);
   }
-  int tr_h = R - 5;  // rows 0..R-6 transcript; R-5 gap; R-4 bar; R-3 input; R-2 bar; R-1 tokens
+  // The input box expands to fit the number of lines in input_ (multi-line via
+  // Shift+Enter / paste). It grows upward so the bottom rule + token line stay
+  // pinned to the bottom of the screen.
+  std::vector<std::string> in_lines;
+  {
+    size_t ls = 0;
+    for (size_t b = 0; b < input_.size(); b++)
+      if (input_[b] == '\n') { in_lines.push_back(input_.substr(ls, b - ls)); ls = b + 1; }
+    in_lines.push_back(input_.substr(ls));
+  }
+  int nlines = (int)in_lines.size();
+  // Map cursor_ (byte offset in input_) to the line it's on and the byte col within it.
+  size_t cur_line = 0, cur_off = 0;
+  {
+    for (size_t b = 0; b < input_.size(); b++) {
+      if (b == cursor_) break;
+      if (input_[b] == '\n') { cur_line++; cur_off = 0; }
+      else cur_off++;
+    }
+  }
+  if (cur_line >= in_lines.size()) cur_line = in_lines.size() - 1;
+
+  int top_rule_row = R - 3 - nlines;  // single line -> R-4 (unchanged from before)
+  if (top_rule_row < 1) top_rule_row = 1;
+  int tr_h = top_rule_row - 1;  // transcript rows 0..tr_h-1; row tr_h is the blank gap
   if (tr_h < 0) tr_h = 0;
 
   // Index of the transcript line drawn at row 0. It is negative when the
   // transcript is shorter than the area, which means blank top padding so the
-  // transcript is bottom-anchored (last line at row R-6). `off` scrolls up within
-  // the transcript; it is clamped so the top of the transcript stays reachable.
+  // transcript is bottom-anchored. `off` scrolls up within the transcript.
   long base = (long)tr.size() - (long)tr_h;
   long max_up = base > 0 ? base : 0;
   long off = scroll_offset_;
@@ -435,7 +441,21 @@ void Tui::redraw() {
   scroll_offset_ = off;  // clamp stored value so PgUp at top is a no-op
   long first = base - off;
 
-  std::string input = input_line(input_, cursor_);
+  // Render one input line; the active line carries the reverse-video block cursor.
+  auto render_input_line = [&](const std::string& il, const std::string& prefix, bool active, size_t col) -> std::string {
+    std::string out = prefix;
+    if (!active) return out + il;
+    size_t i = 0;
+    while (i < il.size()) {
+      size_t end = rune_after(il, i);
+      if (i == col) out += "\x1b[7m" + il.substr(i, end - i) + "\x1b[27m";
+      else out += il.substr(i, end - i);
+      i = end;
+    }
+    if (col == il.size()) out += "\x1b[7m \x1b[27m";  // caret past the last char
+    return out;
+  };
+
   std::string tokens = token_line_str();
 
   std::string frame;
@@ -448,26 +468,31 @@ void Tui::redraw() {
       if (idx >= 0 && idx < (long)tr.size())
         line = tr[idx];
       // else blank: top padding while the transcript is shorter than the area
-    } else if (i == R - 4 || i == R - 2) {
+    } else if (i == top_rule_row || i == R - 2) {
       // Full-width horizontal rules around the input box (above and below it), dimmed.
-      // U+2500 ('─') x C, matching the rule style used by the markdown renderer.
       line.clear();
       line.reserve((size_t)C * 3 + 8);
       line += "\x1b[2m";
       for (int c = 0; c < C; c++) line += "\xe2\x94\x80";
       line += "\x1b[0m";
-    } else if (i == R - 3) {
-      line = input;
     } else if (i == R - 1) {
       line = tokens;
+    } else if (i > top_rule_row && i < R - 2) {
+      int li = i - top_rule_row - 1;  // which input line this screen row holds
+      if (li >= 0 && li < (int)in_lines.size())
+        line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == (int)cur_line, cur_off);
     }
-    // i == R - 5 is left blank: the single separator above the top rule.
+    // i == tr_h (the gap) and any overflow input rows are left blank.
     frame += line;
     frame += "\x1b[K";
     if (i != R - 1) frame += "\n";
   }
-  int cursor_col = 2 + render::display_width(input_.substr(0, cursor_));
-  frame += "\x1b[" + std::to_string(R - 3) + ";" + std::to_string(cursor_col + 1) + "H";
+  int hw_row = top_rule_row + 1 + (int)cur_line;
+  int cursor_col = 2 + render::display_width(in_lines[cur_line].substr(0, cur_off));
+  if (hw_row < 1) hw_row = 1;
+  if (hw_row > R - 1) hw_row = R - 1;
+  if (cursor_col > C) cursor_col = C;
+  frame += "\x1b[" + std::to_string(hw_row) + ";" + std::to_string(cursor_col + 1) + "H";
 
   if (frame == last_frame_ && R == last_rows_) {
     std::cout.flush();
@@ -809,7 +834,14 @@ std::string Tui::read_input() {
       }
       // First sequence (no leading ESC in buffer)
       if (i == 0 && n >= 2) {
-        if (buf[0] == '[' && buf[1] == '<') {
+        if (n == 9 && buf[0] == '[' && buf[1] == '2' && buf[2] == '7' &&
+            buf[3] == ';' && buf[4] == '2' && buf[5] == ';' && buf[6] == '1' &&
+            buf[7] == '3' && buf[8] == '~') {
+          // Shift+Enter (xterm-style modified Enter, ESC[27;2;13~): insert a newline.
+          input_.insert(cursor_, 1, '\n');
+          cursor_++;
+          i = n;  // consumed; skip generic handling below
+        } else if (buf[0] == '[' && buf[1] == '<') {
           // SGR mouse: [<Btn;Col;RowM|m>
           i = 2;
           int btn = 0;
@@ -999,7 +1031,15 @@ Tui::PollResult Tui::poll_input() {
     // First sequence: leading ESC already consumed, buf starts with "[..."
     if (n >= 2 && buf[0] == '[') {
       char p = (char)buf[1]; i = 2;
-      if (p == 'A') { scroll_offset_++; changed = true; }
+      if (n == 9 && p == '2' && buf[2] == '7' && buf[3] == ';' &&
+          buf[4] == '2' && buf[5] == ';' && buf[6] == '1' && buf[7] == '3' &&
+          buf[8] == '~') {
+        // Shift+Enter (ESC[27;2;13~): insert a newline.
+        input_.insert(cursor_, 1, '\n');
+        cursor_++;
+        changed = true;
+        i = n;
+      } else if (p == 'A') { scroll_offset_++; changed = true; }
       else if (p == 'B') { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
       else if (p == 'D') { if (cursor_ > 0) { cursor_ = rune_before(input_, cursor_); changed = true; } }
       else if (p == 'C') { if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); changed = true; } }
