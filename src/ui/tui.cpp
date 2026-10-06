@@ -32,6 +32,37 @@ size_t rune_after(const std::string& s, size_t pos) {
   int len = (b >= 0xF0) ? 4 : (b >= 0xE0) ? 3 : (b >= 0xC0) ? 2 : 1;
   return pos + len;
 }
+// True if byte b is part of a "word" (alphanumeric, underscore, or a non-ASCII
+// rune byte). Spaces/punctuation/newlines are word boundaries.
+bool is_word_char(unsigned char b) {
+  if (b >= 0x80) return true;
+  return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+         (b >= '0' && b <= '9') || b == '_';
+}
+// Byte offset at the end of the word beginning at/after pos: skip leading
+// non-word chars, then run over the word itself (emacs M-f / M-d target).
+size_t word_end(const std::string& s, size_t pos) {
+  size_t p = pos;
+  while (p < s.size() && !is_word_char((unsigned char)s[p])) p = rune_after(s, p);
+  while (p < s.size() && is_word_char((unsigned char)s[p])) p = rune_after(s, p);
+  return p;
+}
+// Byte offset at the start of the word immediately before pos: skip trailing
+// non-word chars, then back off over the word itself (emacs M-b target).
+size_t word_start(const std::string& s, size_t pos) {
+  size_t p = pos;
+  while (p > 0) {
+    size_t q = rune_before(s, p);
+    if (is_word_char((unsigned char)s[q])) break;
+    p = q;
+  }
+  while (p > 0) {
+    size_t q = rune_before(s, p);
+    if (!is_word_char((unsigned char)s[q])) break;
+    p = q;
+  }
+  return p;
+}
 
 // Word-wrap plain text (no ANSI) to `width` columns. Long tokens are hard-broken.
 std::vector<std::string> wrap_plain(const std::string& text, int width) {
@@ -805,12 +836,18 @@ std::string Tui::read_input() {
       cursor_ = 0;  // Ctrl-U
     } else if (c == 0x01) {
       cursor_ = 0;  // Ctrl-A: beginning of line
+    } else if (c == 0x02) {
+      if (cursor_ > 0) cursor_ = rune_before(input_, cursor_);  // Ctrl-B: backward one char
     } else if (c == 0x05) {
       cursor_ = input_.size();  // Ctrl-E: end of line
     } else if (c == 0x06) {
       if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_);  // Ctrl-F: forward
     } else if (c == 0x0b) {
-      input_.erase(cursor_);  // Ctrl-K: kill to end of line
+      kill_ring_ = input_.substr(cursor_);  // Ctrl-K: kill to end of line
+      input_.erase(cursor_);
+    } else if (c == 0x19) {  // Ctrl-Y: yank kill ring (0x19 = 'Y' & 0x1f; 0x18 is Ctrl-X)
+      input_.insert(cursor_, kill_ring_);
+      cursor_ += kill_ring_.size();
     } else if (c == 0x0f) {
       show_reasoning_ = !show_reasoning_;  // Ctrl-O: toggle thinking visibility
       int C = term_cols();
@@ -831,6 +868,34 @@ std::string Tui::read_input() {
         std::string pre((const char*)&buf[5], (size_t)(n - 5));
         consume_paste(std::move(pre));
         i = n;  // paste already drained; skip generic sequence processing below
+      }
+      // Meta (ESC) + a normal character: emacs-style M-key. The ESC itself was
+      // already consumed by read_one_byte, so buf holds only the trailing bytes
+      // (e.g. "f" for M-f, 1 byte).
+      if (i == 0 && n >= 1) {
+        unsigned char mc = (unsigned char)buf[0];
+        if (mc < 0x20 && !(mc == '[' || mc == 'O')) {
+          // ESC + control char is not a meta key we handle; ignore it.
+          i = n;
+        } else if (mc == 'f') {
+          // M-f: forward one word
+          if (cursor_ < input_.size()) cursor_ = word_end(input_, cursor_);
+          i = n;
+        } else if (mc == 'b') {
+          // M-b: backward one word
+          if (cursor_ > 0) cursor_ = word_start(input_, cursor_);
+          i = n;
+        } else if (mc == 'd') {
+          // M-d: kill forward one word
+          size_t e = word_end(input_, cursor_);
+          if (e > cursor_) {
+            kill_ring_ = input_.substr(cursor_, e - cursor_);
+            input_.erase(cursor_, e - cursor_);
+          }
+          i = n;
+        }
+        // (other meta chars fall through to the generic sequence parser, which
+        // skips unknown escape sequences.)
       }
       // First sequence (no leading ESC in buffer)
       if (i == 0 && n >= 2) {

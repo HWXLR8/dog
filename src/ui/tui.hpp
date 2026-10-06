@@ -94,6 +94,7 @@ private:
   std::string input_;
   size_t cursor_ = 0;
   bool exit_requested_ = false;
+  std::string kill_ring_;  // last text killed (Ctrl-K / M-d), yanked by Ctrl-Y
 
   // Scroll. 0 = at bottom (auto-follow). Positive = scrolled up N lines.
   int scroll_offset_ = 0;
