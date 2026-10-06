@@ -170,6 +170,7 @@ void Tui::set_raw(bool on) {
     if (tcgetattr(STDIN_FILENO, &saved) == 0) has_saved = true;
     termios t = saved;
     t.c_lflag &= ~(ICANON | ECHO | ISIG);
+    t.c_iflag &= ~ICRNL;  // keep physical Enter as raw CR so it is distinct from pasted LF newlines
     t.c_cc[VMIN] = 1;
     t.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &t);
@@ -186,7 +187,8 @@ void Tui::start_screen() {
             << "\x1b[2J"       // clear
             << "\x1b[H"        // home
             << "\x1b[?25l"     // hide cursor
-            << "\x1b[?1006h";  // SGR mouse mode
+            << "\x1b[?1006h"   // SGR mouse mode
+            << "\x1b[?2004h";  // bracketed paste mode
   std::cout.flush();
   set_raw(true);
   alt_ = true;
@@ -740,7 +742,7 @@ std::string Tui::read_input() {
       redraw();
       return s;
     }
-    if (c == '\r' || c == '\n') {
+    if (c == '\r') {
       std::string s = input_;
       input_.clear();
       cursor_ = 0;
@@ -797,12 +799,16 @@ std::string Tui::read_input() {
         ssize_t r = read(STDIN_FILENO, buf, sizeof(buf) - 1);
         if (r > 0) n = (int)r;
       }
-      // Process all sequences in the buffer (terminal may batch multiple).
-      // First sequence: leading ESC already consumed, buf starts with "[..." or "O..."
-      // Subsequent: full ESC + rest.
       int i = 0;
+      if (n >= 5 && buf[0] == '[' && buf[1] == '2' && buf[2] == '0' && buf[3] == '0' && buf[4] == '~') {
+        // Bracketed paste start (ESC[200~ ... ESC[201~): insert the whole blob literally
+        // so pasted newlines never submit the prompt; only a physical Enter does.
+        std::string pre((const char*)&buf[5], (size_t)(n - 5));
+        consume_paste(std::move(pre));
+        i = n;  // paste already drained; skip generic sequence processing below
+      }
       // First sequence (no leading ESC in buffer)
-      if (n >= 2) {
+      if (i == 0 && n >= 2) {
         if (buf[0] == '[' && buf[1] == '<') {
           // SGR mouse: [<Btn;Col;RowM|m>
           i = 2;
@@ -885,11 +891,36 @@ std::string Tui::read_input() {
           i++;
         }
       }
+    } else if (c == '\n') {  // pasted newline: insert as literal (only Enter submits)
+      input_.insert(cursor_, 1, '\n');
+      cursor_++;
     } else if (c >= 0x20) {
       input_.insert(cursor_, 1, (char)c);
       cursor_++;
     }
     redraw();
+  }
+}
+
+void Tui::consume_paste(std::string pre) {
+  input_.insert(cursor_, pre);
+  cursor_ += pre.size();
+  const std::string end_marker = "\x1b[201~";  // bracketed paste end
+  const size_t m = end_marker.size();
+  std::string tail;
+  for (;;) {
+    unsigned char ch;
+    ssize_t r = read(STDIN_FILENO, &ch, 1);
+    if (r != 1) break;  // EOF: paste without a clean end marker
+    tail.push_back((char)ch);
+    if (tail.size() > m) tail.erase(0, tail.size() - m);
+    input_.insert(cursor_, 1, (char)ch);  // insert literally (newlines included)
+    cursor_++;
+    if (tail.size() == m && tail == end_marker) {
+      input_.erase(input_.size() - m, m);  // strip the end marker we just inserted
+      cursor_ -= m;
+      return;
+    }
   }
 }
 

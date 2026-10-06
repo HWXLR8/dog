@@ -57,6 +57,7 @@ private:
   std::vector<std::string> render_item(int kind, const std::string& raw, int width) const;
   void one_shot_thinking_line();
   void one_shot_thinking_clear();
+  void consume_paste(std::string pre);  // drain a bracketed paste into input_ literally
   void spinner_loop();  // timer-driven redraws so the status line animates
 
   struct Item {
