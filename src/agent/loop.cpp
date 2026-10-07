@@ -365,7 +365,7 @@ bool AgentLoop::run_turn(const std::string& user_input,
     // Collect any images the tools returned (e.g. read_file on an image).
     // OpenAI requires `role:"tool"` messages to be text-only, so images are
     // emitted as a single follow-up `role:"user"` message after all tool results
-    // stay contiguous (mirrors qwen's splitToolMedia behavior).
+    // stay contiguous.
     std::vector<ImagePart> pending_images;
     for (auto& tc : res.tool_calls) {
       if (interrupt_flag.load()) {

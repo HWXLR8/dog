@@ -49,6 +49,10 @@ private:
   void end_screen();
   void set_raw(bool on);
   bool read_one_byte(int* c);
+  bool stdin_ready(int ms);
+  PollResult handle_poll_byte(int c);
+  bool apply_edit_key(int c);
+  bool apply_esc_bytes();
   std::vector<std::string> content_lines() const;
   std::string status_string() const;
   std::string token_line_str() const;
@@ -75,6 +79,10 @@ private:
 
   // Live assistant message being streamed.
   std::string live_;
+  // Cached render of live_ (markdown) so frequent redraws (spinner) are cheap:
+  // markdown is re-parsed only when the streamed text (or width) changes.
+  mutable std::vector<std::string> live_cached_;
+  mutable std::string live_cache_key_;  // = live_ + " " + term_cols()
 
   // Live reasoning being streamed (shown in transcript in real-time).
   bool reasoning_active_ = false;

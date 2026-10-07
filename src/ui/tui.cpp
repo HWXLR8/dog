@@ -385,7 +385,14 @@ std::vector<std::string> Tui::content_lines() const {
     out.push_back("");
   }
   if (!live_.empty()) {
-    auto ml = render::markdown(live_, C);
+    // Re-parse markdown only when the streamed text (or width) actually changed;
+    // the spinner redraw otherwise just reuses the cached lines.
+    std::string key = live_ + " " + std::to_string(C);
+    if (key != live_cache_key_) {
+      live_cached_ = render::markdown(live_, C);
+      live_cache_key_ = std::move(key);
+    }
+    auto& ml = live_cached_;
     size_t first = 0;
     while (first < ml.size() && ml[first].empty()) first++;
     for (size_t i = first; i < ml.size(); i++) out.push_back(ml[i]);
@@ -456,7 +463,7 @@ void Tui::redraw() {
   }
   if (cur_line >= in_lines.size()) cur_line = in_lines.size() - 1;
 
-  int top_rule_row = R - 3 - nlines;  // single line -> R-4 (unchanged from before)
+  int top_rule_row = R - 3 - nlines;
   if (top_rule_row < 1) top_rule_row = 1;
   int tr_h = top_rule_row - 1;  // transcript rows 0..tr_h-1; row tr_h is the blank gap
   if (tr_h < 0) tr_h = 0;
@@ -557,10 +564,12 @@ void Tui::on_reasoning(const std::string& c) {
   reasoning_active_ = true;
   for (char ch : c) reasoning_ += (ch == '\n' || ch == '\r') ? ' ' : ch;
   live_out_est_ = (live_.size() + reasoning_.size()) / 4;
-  if (interactive_)
-    redraw();
-  else
+  if (interactive_) {
+    // Interactive: the spinner thread re-renders on its next tick; a synchronous
+    // redraw would hold draw_mu_ on the agent thread and stall input polling.
+  } else {
     one_shot_thinking_line();
+  }
 }
 
 void Tui::on_text(const std::string& c) {
@@ -569,8 +578,10 @@ void Tui::on_text(const std::string& c) {
   answer_started_ = true;
   live_ += c;
   live_out_est_ = (live_.size() + reasoning_.size()) / 4;
-  if (interactive_) redraw();
-  // one-shot: buffered, rendered on round_end to keep markdown clean
+  // Do NOT redraw here: the spinner thread owns redraw cadence and re-renders on
+  // its next tick (the markdown is cached, so that is cheap). Holding draw_mu_
+  // per streamed token on the agent thread would stall input polling.
+  // (one-shot: buffered, rendered on round_end to keep markdown clean.)
 }
 
 void Tui::on_round_end() {
@@ -798,19 +809,17 @@ std::string Tui::read_input() {
       redraw();
       return s;
     }
+    // Terminal-submit keys live here (physical Enter submits; Ctrl-C clears or
+    // exits; Ctrl-D exits or deletes). Everything else is editing and is handled
+    // by the SAME shared core used by the live-turn poll, so every keybinding
+    // behaves identically at the idle prompt and while the agent is working.
     if (c == '\r') {
       std::string s = input_;
       input_.clear();
       cursor_ = 0;
       redraw();
       return s;
-    } else if (c == 0x7f || c == 0x08) {
-      if (cursor_ > 0) {
-        size_t from = rune_before(input_, cursor_);
-        input_.erase(from, cursor_ - from);
-        cursor_ = from;
-      }
-    } else if (c == 0x03) {  // Ctrl-C
+    } else if (c == 0x03) {  // Ctrl-C: clear line, or exit if empty
       if (!input_.empty()) {
         input_.clear();
         cursor_ = 0;
@@ -821,7 +830,7 @@ std::string Tui::read_input() {
         redraw();
         return s;
       }
-    } else if (c == 0x04) {  // Ctrl-D
+    } else if (c == 0x04) {  // Ctrl-D: exit if empty, else delete one char
       if (input_.empty()) {
         exit_requested_ = true;
         std::string s = input_;
@@ -831,169 +840,8 @@ std::string Tui::read_input() {
       }
       size_t to = rune_after(input_, cursor_);
       input_.erase(cursor_, to - cursor_);
-    } else if (c == 0x15) {
-      input_.clear();
-      cursor_ = 0;  // Ctrl-U
-    } else if (c == 0x01) {
-      cursor_ = 0;  // Ctrl-A: beginning of line
-    } else if (c == 0x02) {
-      if (cursor_ > 0) cursor_ = rune_before(input_, cursor_);  // Ctrl-B: backward one char
-    } else if (c == 0x05) {
-      cursor_ = input_.size();  // Ctrl-E: end of line
-    } else if (c == 0x06) {
-      if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_);  // Ctrl-F: forward
-    } else if (c == 0x0b) {
-      kill_ring_ = input_.substr(cursor_);  // Ctrl-K: kill to end of line
-      input_.erase(cursor_);
-    } else if (c == 0x19) {  // Ctrl-Y: yank kill ring (0x19 = 'Y' & 0x1f; 0x18 is Ctrl-X)
-      input_.insert(cursor_, kill_ring_);
-      cursor_ += kill_ring_.size();
-    } else if (c == 0x0f) {
-      show_reasoning_ = !show_reasoning_;  // Ctrl-O: toggle thinking visibility
-      int C = term_cols();
-      for (auto& it : items_)
-        if (it.kind == 4) it.lines = render_item(4, it.raw, C);
-    } else if (c == 0x1b) {
-      // Read the full escape sequence in one bulk read
-      unsigned char buf[32] = {0};
-      int n = 0;
-      {
-        ssize_t r = read(STDIN_FILENO, buf, sizeof(buf) - 1);
-        if (r > 0) n = (int)r;
-      }
-      int i = 0;
-      if (n >= 5 && buf[0] == '[' && buf[1] == '2' && buf[2] == '0' && buf[3] == '0' && buf[4] == '~') {
-        // Bracketed paste start (ESC[200~ ... ESC[201~): insert the whole blob literally
-        // so pasted newlines never submit the prompt; only a physical Enter does.
-        std::string pre((const char*)&buf[5], (size_t)(n - 5));
-        consume_paste(std::move(pre));
-        i = n;  // paste already drained; skip generic sequence processing below
-      }
-      // Meta (ESC) + a normal character: emacs-style M-key. The ESC itself was
-      // already consumed by read_one_byte, so buf holds only the trailing bytes
-      // (e.g. "f" for M-f, 1 byte).
-      if (i == 0 && n >= 1) {
-        unsigned char mc = (unsigned char)buf[0];
-        if (mc < 0x20 && !(mc == '[' || mc == 'O')) {
-          // ESC + control char is not a meta key we handle; ignore it.
-          i = n;
-        } else if (mc == 'f') {
-          // M-f: forward one word
-          if (cursor_ < input_.size()) cursor_ = word_end(input_, cursor_);
-          i = n;
-        } else if (mc == 'b') {
-          // M-b: backward one word
-          if (cursor_ > 0) cursor_ = word_start(input_, cursor_);
-          i = n;
-        } else if (mc == 'd') {
-          // M-d: kill forward one word
-          size_t e = word_end(input_, cursor_);
-          if (e > cursor_) {
-            kill_ring_ = input_.substr(cursor_, e - cursor_);
-            input_.erase(cursor_, e - cursor_);
-          }
-          i = n;
-        }
-        // (other meta chars fall through to the generic sequence parser, which
-        // skips unknown escape sequences.)
-      }
-      // First sequence (no leading ESC in buffer)
-      if (i == 0 && n >= 2) {
-        if (n == 9 && buf[0] == '[' && buf[1] == '2' && buf[2] == '7' &&
-            buf[3] == ';' && buf[4] == '2' && buf[5] == ';' && buf[6] == '1' &&
-            buf[7] == '3' && buf[8] == '~') {
-          // Shift+Enter (xterm-style modified Enter, ESC[27;2;13~): insert a newline.
-          input_.insert(cursor_, 1, '\n');
-          cursor_++;
-          i = n;  // consumed; skip generic handling below
-        } else if (buf[0] == '[' && buf[1] == '<') {
-          // SGR mouse: [<Btn;Col;RowM|m>
-          i = 2;
-          int btn = 0;
-          while (i < n && buf[i] >= '0' && buf[i] <= '9') { btn = btn * 10 + (buf[i] - '0'); i++; }
-          if (btn == 64) scroll_offset_++;
-          else if (btn == 65) { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-          // skip rest of sequence (;Col;RowM|m)
-          while (i < n && buf[i] != 0x1b) i++;
-        } else if (buf[0] == '[' && n >= 2) {
-          char p = (char)buf[1]; i = 2;
-          if (p == 'A') scroll_offset_++;
-          else if (p == 'B') { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-          else if (p == 'D') { if (cursor_ > 0) cursor_ = rune_before(input_, cursor_); }
-          else if (p == 'C') { if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_); }
-          else if (p == 'H') cursor_ = 0;
-          else if (p == 'F') cursor_ = input_.size();
-          else if (p == '5') scroll_offset_ += 10;
-          else if (p == '6') { scroll_offset_ -= 10; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-          else if (p >= '0' && p <= '9') {
-            int num = p - '0';
-            while (i < n && buf[i] >= '0' && buf[i] <= '9') { num = num * 10 + (buf[i] - '0'); i++; }
-            if (i < n && buf[i] == ';') {
-              if (num == 64) scroll_offset_++;
-              else if (num == 65) { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-            }
-          }
-          // skip to next ESC or end
-          while (i < n && buf[i] != 0x1b) i++;
-        } else if (buf[0] == 'O' && n >= 2) {
-          char p = (char)buf[1]; i = 2;
-          if (p == 'D') { if (cursor_ > 0) cursor_ = rune_before(input_, cursor_); }
-          else if (p == 'C') { if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_); }
-          else if (p == 'H') cursor_ = 0;
-          else if (p == 'F') cursor_ = input_.size();
-        }
-      }
-      // Remaining sequences (each starts with ESC)
-      while (i < n) {
-        if (buf[i] == 0x1b && i + 1 < n && buf[i+1] == '[') {
-          i += 2;
-          if (i < n && buf[i] == '<') {
-            i++;
-            int btn = 0;
-            while (i < n && buf[i] >= '0' && buf[i] <= '9') { btn = btn * 10 + (buf[i] - '0'); i++; }
-            if (btn == 64) scroll_offset_++;
-            else if (btn == 65) { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-            while (i < n && buf[i] != 0x1b) i++;
-          } else if (i < n) {
-            char p = (char)buf[i]; i++;
-            if (p == 'A') scroll_offset_++;
-            else if (p == 'B') { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-            else if (p == 'D') { if (cursor_ > 0) cursor_ = rune_before(input_, cursor_); }
-            else if (p == 'C') { if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_); }
-            else if (p == 'H') cursor_ = 0;
-            else if (p == 'F') cursor_ = input_.size();
-            else if (p == '5') scroll_offset_ += 10;
-            else if (p == '6') { scroll_offset_ -= 10; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-            else if (p >= '0' && p <= '9') {
-              int num = p - '0';
-              while (i < n && buf[i] >= '0' && buf[i] <= '9') { num = num * 10 + (buf[i] - '0'); i++; }
-              if (i < n && buf[i] == ';') {
-                if (num == 64) scroll_offset_++;
-                else if (num == 65) { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; }
-              }
-            }
-            while (i < n && buf[i] != 0x1b) i++;
-          }
-        } else if (buf[i] == 0x1b && i + 1 < n && buf[i+1] == 'O') {
-          i += 2;
-          if (i < n) {
-            char p = (char)buf[i]; i++;
-            if (p == 'D') { if (cursor_ > 0) cursor_ = rune_before(input_, cursor_); }
-            else if (p == 'C') { if (cursor_ < input_.size()) cursor_ = rune_after(input_, cursor_); }
-            else if (p == 'H') cursor_ = 0;
-            else if (p == 'F') cursor_ = input_.size();
-          }
-          while (i < n && buf[i] != 0x1b) i++;
-        } else {
-          i++;
-        }
-      }
-    } else if (c == '\n') {  // pasted newline: insert as literal (only Enter submits)
-      input_.insert(cursor_, 1, '\n');
-      cursor_++;
-    } else if (c >= 0x20) {
-      input_.insert(cursor_, 1, (char)c);
-      cursor_++;
+    } else {
+      apply_edit_key(c);  // shared editing core (identical to live-turn poll)
     }
     redraw();
   }
@@ -1021,132 +869,235 @@ void Tui::consume_paste(std::string pre) {
   }
 }
 
-Tui::PollResult Tui::poll_input() {
+bool Tui::stdin_ready(int ms) {
   fd_set fds;
   FD_ZERO(&fds);
   FD_SET(STDIN_FILENO, &fds);
-  timeval tv{0, 0};
-  if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0)
-    return PollResult::kNone;
+  timeval tv{ms / 1000, (ms % 1000) * 1000};
+  return select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0;
+}
 
-  int c = 0;
-  if (!read_one_byte(&c))
-    return PollResult::kNone;
+// Shared editing core (cursor moves / kill ring / yank / meta keys / printable /
+// backspace / ESC sequences). Identical for the idle prompt and the live-turn
+// poll so every keybinding works in both modes. Caller holds draw_mu_. The leading
+// ESC, when present, has already been consumed by the caller's read_one_byte.
+bool Tui::apply_edit_key(int c) {
+  if (c == 0x7f || c == 0x08) {  // Backspace / DEL
+    if (cursor_ > 0) {
+      size_t from = rune_before(input_, cursor_);
+      input_.erase(from, cursor_ - from);
+      cursor_ = from;
+    }
+    return true;
+  } else if (c == 0x15) {  // Ctrl-U: kill to start of line
+    input_.erase(0, cursor_);
+    cursor_ = 0;
+    return true;
+  } else if (c == 0x01) {  // Ctrl-A: beginning of line
+    if (cursor_ != 0) { cursor_ = 0; return true; }
+    return false;
+  } else if (c == 0x02) {  // Ctrl-B: backward one rune
+    if (cursor_ > 0) { cursor_ = rune_before(input_, cursor_); return true; }
+    return false;
+  } else if (c == 0x05) {  // Ctrl-E: end of line
+    if (cursor_ != input_.size()) { cursor_ = input_.size(); return true; }
+    return false;
+  } else if (c == 0x06) {  // Ctrl-F: forward one rune
+    if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); return true; }
+    return false;
+  } else if (c == 0x0b) {  // Ctrl-K: kill to end of line
+    kill_ring_ = input_.substr(cursor_);
+    input_.erase(cursor_);
+    return true;
+  } else if (c == 0x19) {  // Ctrl-Y: yank kill ring
+    input_.insert(cursor_, kill_ring_);
+    cursor_ += kill_ring_.size();
+    return true;
+  } else if (c == 0x0f) {  // Ctrl-O: toggle thinking visibility
+    show_reasoning_ = !show_reasoning_;
+    int C = term_cols();
+    for (auto& it : items_)
+      if (it.kind == 4) it.lines = render_item(4, it.raw, C);
+    return true;
+  } else if (c == 0x1b) {  // Escape: parse the rest of the sequence
+    return apply_esc_bytes();
+  } else if (c == '\n') {  // pasted newline: insert literally (only Enter submits)
+    input_.insert(cursor_, 1, '\n');
+    cursor_++;
+    return true;
+  } else if (c >= 0x20) {  // printable (incl. high UTF-8 bytes)
+    input_.insert(cursor_, 1, (char)c);
+    cursor_++;
+    return true;
+  }
+  return false;
+}
 
-  // Ctrl-C: request a clean interrupt of the running turn (the agent stops at
-  // its next checkpoint and returns to the prompt).
-  if (c == 0x03) {
+// Parse an ANSI escape sequence whose leading ESC has already been consumed.
+// Handles bracketed paste, emacs meta keys (M-f / M-b / M-d), Shift+Enter, SGR
+// mouse, and cursor/scroll sequences. Caller holds draw_mu_. Returns true if the
+// input box or scroll position changed.
+bool Tui::apply_esc_bytes() {
+  unsigned char buf[32] = {0};
+  int n = 0;
+  if (stdin_ready(10)) {
+    ssize_t r = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+    if (r > 0) n = (int)r;
+  }
+  bool changed = false;
+  auto scroll_up = [&]() { scroll_offset_++; changed = true; };
+  auto scroll_down = [&]() { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; };
+  auto fwd = [&]() { if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); changed = true; } };
+  auto back = [&]() { if (cursor_ > 0) { cursor_ = rune_before(input_, cursor_); changed = true; } };
+  int i = 0;
+  if (n >= 5 && buf[0] == '[' && buf[1] == '2' && buf[2] == '0' && buf[3] == '0' && buf[4] == '~') {
+    // Bracketed paste start (ESC[200~ ... ESC[201~): insert blob literally so
+    // pasted newlines never submit the prompt; only a physical Enter does.
+    std::string pre((const char*)&buf[5], (size_t)(n - 5));
+    consume_paste(std::move(pre));
+    i = n;
+    changed = true;
+  }
+  // Meta (ESC) + a normal character: emacs-style M-key (ESC already consumed).
+  if (i == 0 && n >= 1) {
+    unsigned char mc = buf[0];
+    if (mc < 0x20 && !(mc == '[' || mc == 'O')) {
+      i = n;  // ESC + control char: ignore
+    } else if (mc == 'f') {
+      if (cursor_ < input_.size()) cursor_ = word_end(input_, cursor_);
+      i = n;
+      changed = true;
+    } else if (mc == 'b') {
+      if (cursor_ > 0) cursor_ = word_start(input_, cursor_);
+      i = n;
+      changed = true;
+    } else if (mc == 'd') {
+      size_t e = word_end(input_, cursor_);
+      if (e > cursor_) {
+        kill_ring_ = input_.substr(cursor_, e - cursor_);
+        input_.erase(cursor_, e - cursor_);
+      }
+      i = n;
+      changed = true;
+    }
+  }
+  // First sequence (no leading ESC in buffer).
+  if (i == 0 && n >= 2) {
+    if (n == 9 && buf[0] == '[' && buf[1] == '2' && buf[2] == '7' &&
+        buf[3] == ';' && buf[4] == '2' && buf[5] == ';' && buf[6] == '1' &&
+        buf[7] == '3' && buf[8] == '~') {
+      input_.insert(cursor_, 1, '\n');  // Shift+Enter (ESC[27;2;13~)
+      cursor_++;
+      i = n;
+      changed = true;
+    } else if (buf[0] == '[' && buf[1] == '<') {  // SGR mouse: [<Btn;Col;RowM|m>
+      i = 2;
+      int btn = 0;
+      while (i < n && buf[i] >= '0' && buf[i] <= '9') { btn = btn * 10 + (buf[i] - '0'); i++; }
+      if (btn == 64) scroll_up();
+      else if (btn == 65) scroll_down();
+      while (i < n && buf[i] != 0x1b) i++;
+    } else if (buf[0] == '[') {
+      char p = (char)buf[1]; i = 2;
+      if (p == 'A') scroll_up();
+      else if (p == 'B') scroll_down();
+      else if (p == 'D') back();
+      else if (p == 'C') fwd();
+      else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
+      else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
+      else if (p == '5') scroll_up();
+      else if (p == '6') scroll_down();
+      else if (p >= '0' && p <= '9') {
+        int num = p - '0';
+        while (i < n && buf[i] >= '0' && buf[i] <= '9') { num = num * 10 + (buf[i] - '0'); i++; }
+        if (i < n && buf[i] == ';') {
+          if (num == 64) scroll_up();
+          else if (num == 65) scroll_down();
+        }
+      }
+      while (i < n && buf[i] != 0x1b) i++;
+    } else if (buf[0] == 'O') {
+      char p = (char)buf[1]; i = 2;
+      if (p == 'D') back();
+      else if (p == 'C') fwd();
+      else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
+      else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
+    }
+  }
+  // Remaining sequences (each starts with ESC).
+  while (i < n) {
+    if (buf[i] == 0x1b && i + 1 < n && buf[i + 1] == '[') {
+      i += 2;
+      if (i < n && buf[i] == '<') {
+        i++;
+        int btn = 0;
+        while (i < n && buf[i] >= '0' && buf[i] <= '9') { btn = btn * 10 + (buf[i] - '0'); i++; }
+        if (btn == 64) scroll_up();
+        else if (btn == 65) scroll_down();
+        while (i < n && buf[i] != 0x1b) i++;
+      } else if (i < n) {
+        char p = (char)buf[i]; i++;
+        if (p == 'A') scroll_up();
+        else if (p == 'B') scroll_down();
+        else if (p == 'D') back();
+        else if (p == 'C') fwd();
+        else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
+        else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
+        else if (p == '5') scroll_up();
+        else if (p == '6') scroll_down();
+        while (i < n && buf[i] != 0x1b) i++;
+      }
+    } else if (buf[i] == 0x1b && i + 1 < n && buf[i + 1] == 'O') {
+      i += 2;
+      if (i < n) {
+        char p = (char)buf[i]; i++;
+        if (p == 'D') back();
+        else if (p == 'C') fwd();
+        else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
+        else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
+      }
+      while (i < n && buf[i] != 0x1b) i++;
+    } else {
+      i++;
+    }
+  }
+  return changed;
+}
+
+// Apply a single keystroke read during a live turn to the input box. Returns the
+// poll outcome (kCancel on Ctrl-C, kRedraw if the box changed). Delegates all
+// editing to apply_edit_key so it stays in lockstep with the idle prompt.
+Tui::PollResult Tui::handle_poll_byte(int c) {
+  if (c == 0x03) {  // Ctrl-C: request a clean interrupt of the running turn
     util::request_interrupt();
     return PollResult::kCancel;
   }
-
-  // Line editing: the input box is a live line buffer, so keystrokes typed while
-  // a turn is running are applied to input_/cursor_ (not discarded) and the box
-  // is redrawn. This mirrors the editing keys handled in read_input(). The lock
-  // serializes against the spinner/agent threads that also call redraw().
-  {
-    std::lock_guard<std::mutex> lk(draw_mu_);
-    bool changed = false;
-    if (c == 0x7f || c == 0x08) {  // Backspace / DEL
-      if (cursor_ > 0) {
-        size_t from = rune_before(input_, cursor_);
-        input_.erase(from, cursor_ - from);
-        cursor_ = from;
-      }
-      changed = true;
-    } else if (c == 0x15) {  // Ctrl-U: kill to start of line
-      input_.erase(0, cursor_);
-      cursor_ = 0;
-      changed = true;
-    } else if (c == 0x01) {  // Ctrl-A: beginning of line
-      if (cursor_ != 0) { cursor_ = 0; changed = true; }
-    } else if (c == 0x05) {  // Ctrl-E: end of line
-      if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; }
-    } else if (c == 0x06) {  // Ctrl-F: move forward one rune
-      if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); changed = true; }
-    } else if (c == 0x0b) {  // Ctrl-K: kill to end of line
-      input_.erase(cursor_);
-      changed = true;
-    } else if (c == 0x0f) {  // Ctrl-O: toggle thinking visibility
-      show_reasoning_ = !show_reasoning_;
-      int C = term_cols();
-      for (auto& it : items_)
-        if (it.kind == 4) it.lines = render_item(4, it.raw, C);
-      changed = true;
-    } else if (c >= 0x20) {  // printable (incl. high UTF-8 bytes)
-      input_.insert(cursor_, 1, (char)c);
-      cursor_++;
-      changed = true;
-    }
-    if (changed) {
-      redraw();
-      return PollResult::kRedraw;
-    }
-  }
-
-  if (c == 0x1b) {
-    unsigned char buf[32] = {0};
-    int n = 0;
-    ssize_t r = read(STDIN_FILENO, buf, sizeof(buf) - 1);
-    if (r > 0) n = (int)r;
-
-    std::lock_guard<std::mutex> lk(draw_mu_);
-    bool changed = false;
-    int i = 0;
-    // First sequence: leading ESC already consumed, buf starts with "[..."
-    if (n >= 2 && buf[0] == '[') {
-      char p = (char)buf[1]; i = 2;
-      if (n == 9 && p == '2' && buf[2] == '7' && buf[3] == ';' &&
-          buf[4] == '2' && buf[5] == ';' && buf[6] == '1' && buf[7] == '3' &&
-          buf[8] == '~') {
-        // Shift+Enter (ESC[27;2;13~): insert a newline.
-        input_.insert(cursor_, 1, '\n');
-        cursor_++;
-        changed = true;
-        i = n;
-      } else if (p == 'A') { scroll_offset_++; changed = true; }
-      else if (p == 'B') { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
-      else if (p == 'D') { if (cursor_ > 0) { cursor_ = rune_before(input_, cursor_); changed = true; } }
-      else if (p == 'C') { if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); changed = true; } }
-      else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
-      else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
-      else if (p == '5') { scroll_offset_ += 10; changed = true; }
-      else if (p == '6') { scroll_offset_ -= 10; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
-      while (i < n && buf[i] != 0x1b) i++;
-    }
-    // Remaining sequences (each starts with ESC)
-    while (i < n) {
-      if (buf[i] == 0x1b && i + 1 < n && buf[i+1] == '[') {
-        i += 2;
-        if (i < n && buf[i] == '<') {
-          i++;
-          int btn = 0;
-          while (i < n && buf[i] >= '0' && buf[i] <= '9') { btn = btn * 10 + (buf[i] - '0'); i++; }
-          if (btn == 64) { scroll_offset_++; changed = true; }
-          else if (btn == 65) { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
-          while (i < n && buf[i] != 0x1b) i++;
-        } else if (i < n) {
-          char p = (char)buf[i]; i++;
-          if (p == 'A') { scroll_offset_++; changed = true; }
-          else if (p == 'B') { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
-          else if (p == 'D') { if (cursor_ > 0) { cursor_ = rune_before(input_, cursor_); changed = true; } }
-          else if (p == 'C') { if (cursor_ < input_.size()) { cursor_ = rune_after(input_, cursor_); changed = true; } }
-          else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
-          else if (p == 'F') { if (cursor_ != input_.size()) { cursor_ = input_.size(); changed = true; } }
-          else if (p == '5') { scroll_offset_ += 10; changed = true; }
-          else if (p == '6') { scroll_offset_ -= 10; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; }
-          while (i < n && buf[i] != 0x1b) i++;
-        }
-      } else {
-        i++;
-      }
-    }
-    if (changed) {
-      redraw();
-      return PollResult::kRedraw;
-    }
+  std::lock_guard<std::mutex> lk(draw_mu_);
+  bool changed = apply_edit_key(c);
+  if (changed) {
+    redraw();
+    return PollResult::kRedraw;
   }
   return PollResult::kNone;
+}
+
+Tui::PollResult Tui::poll_input() {
+  // Drive cadence off stdin readiness (tiny 1ms wait) instead of a fixed sleep,
+  // and drain EVERY available keystroke per wake so rapid typing is applied
+  // immediately rather than one byte per tick. This is what keeps the input box
+  // fully responsive while the agent is working in the background.
+  PollResult last = PollResult::kNone;
+  for (;;) {
+    if (!stdin_ready(1))
+      return last;  // no pending input: yield so the outer loop can re-check
+      // whether the agent finished and re-enter the prompt.
+    int c = 0;
+    if (!read_one_byte(&c)) return last;
+    PollResult r = handle_poll_byte(c);
+    if (r == PollResult::kCancel) return PollResult::kCancel;
+    if (r == PollResult::kRedraw) last = PollResult::kRedraw;
+    // loop back: any more bytes are waiting -> read them right now (no delay).
+  }
 }
 
 void Tui::spinner_loop() {
