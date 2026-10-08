@@ -200,7 +200,6 @@ void Tui::start_screen() {
   std::cout << "\x1b[?1049h"  // alt screen
             << "\x1b[2J"       // clear
             << "\x1b[H"        // home
-            << "\x1b[?25l"     // hide cursor
             << "\x1b[?1006h"   // SGR mouse mode
             << "\x1b[?2004h";  // bracketed paste mode
   std::cout.flush();
@@ -479,19 +478,10 @@ void Tui::redraw() {
   scroll_offset_ = off;  // clamp stored value so PgUp at top is a no-op
   long first = base - off;
 
-  // Render one input line; the active line carries the reverse-video block cursor.
-  auto render_input_line = [&](const std::string& il, const std::string& prefix, bool active, size_t col) -> std::string {
-    std::string out = prefix;
-    if (!active) return out + il;
-    size_t i = 0;
-    while (i < il.size()) {
-      size_t end = rune_after(il, i);
-      if (i == col) out += "\x1b[7m" + il.substr(i, end - i) + "\x1b[27m";
-      else out += il.substr(i, end - i);
-      i = end;
-    }
-    if (col == il.size()) out += "\x1b[7m \x1b[27m";  // caret past the last char
-    return out;
+  // Render one input line. The caret is the real terminal cursor (positioned at
+  // the end of the frame), so this just draws the line plain.
+  auto render_input_line = [&](const std::string& il, const std::string& prefix, bool, size_t) -> std::string {
+    return prefix + il;
   };
 
   std::string tokens = token_line_str();
@@ -525,7 +515,7 @@ void Tui::redraw() {
     frame += "\x1b[K";
     if (i != R - 1) frame += "\n";
   }
-  int hw_row = top_rule_row + 1 + (int)cur_line;
+  int hw_row = top_rule_row + 2 + (int)cur_line;
   int cursor_col = 2 + render::display_width(in_lines[cur_line].substr(0, cur_off));
   if (hw_row < 1) hw_row = 1;
   if (hw_row > R - 1) hw_row = R - 1;
