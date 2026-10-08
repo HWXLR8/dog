@@ -144,6 +144,29 @@ std::string token_line(bool ansi, long in, long out, long s_in, long s_out,
   return "\x1b[2m  " + num + "   \xc2\xb7   " + sess + "   \xc2\xb7   " + ctx + "\x1b[0m";
 }
 
+// Column-hard-wrap that preserves EVERY character (runs and trailing spaces) and
+// breaks on newlines. Each output row is <= width display columns. Used for the
+// editable input box (wrap_plain normalizes whitespace and would desync the caret).
+std::vector<std::string> wrap_input(const std::string& text, int width) {
+  if (width <= 0) width = 80;
+  std::vector<std::string> out;
+  std::string cur;
+  int curw = 0;
+  auto flush = [&]() { out.push_back(cur); cur.clear(); curw = 0; };
+  size_t i = 0;
+  while (i < text.size()) {
+    if (text[i] == '\n') { flush(); i++; continue; }  // newline = hard break
+    size_t e = rune_after(text, i);
+    int w = render::display_width(text.substr(i, e - i));
+    if (curw + w > width && !cur.empty()) flush();     // width overflow = soft break
+    cur.append(text, i, e - i);
+    curw += w;
+    i = e;
+  }
+  flush();  // final row (empty for empty input or a trailing newline)
+  return out;
+}
+
 std::string spinner_thinking(const std::string& reasoning, long ms, int cols) {
   size_t f = (((ms / 80) % 10) + 10) % 10;
   int budget = cols - 14;
@@ -440,27 +463,16 @@ void Tui::redraw() {
     if (!tr.empty() && !tr.back().empty()) tr.push_back("");
     tr.push_back(status);
   }
-  // The input box expands to fit the number of lines in input_ (multi-line via
-  // Shift+Enter / paste). It grows upward so the bottom rule + token line stay
-  // pinned to the bottom of the screen.
-  std::vector<std::string> in_lines;
-  {
-    size_t ls = 0;
-    for (size_t b = 0; b < input_.size(); b++)
-      if (input_[b] == '\n') { in_lines.push_back(input_.substr(ls, b - ls)); ls = b + 1; }
-    in_lines.push_back(input_.substr(ls));
-  }
+  // The input box expands to fit the number of physical rows input_ wraps to
+  // (multi-line via Shift+Enter / paste, plus long lines that wrap). It grows
+  // upward so the bottom rule + token line stay pinned to the bottom.
+  std::vector<std::string> in_lines = wrap_input(input_, C - 3);  // C-3: 2 prefix + 1 guard
   int nlines = (int)in_lines.size();
-  // Map cursor_ (byte offset in input_) to the line it's on and the byte col within it.
-  size_t cur_line = 0, cur_off = 0;
-  {
-    for (size_t b = 0; b < input_.size(); b++) {
-      if (b == cursor_) break;
-      if (input_[b] == '\n') { cur_line++; cur_off = 0; }
-      else cur_off++;
-    }
-  }
-  if (cur_line >= in_lines.size()) cur_line = in_lines.size() - 1;
+  // Caret = end of the last row of the prefix (everything before the cursor).
+  auto pre = wrap_input(input_.substr(0, cursor_), C - 3);
+  int cur_line = (int)pre.size() - 1;
+  int cur_col = render::display_width(pre.back());
+  if (cur_line < 0) { cur_line = 0; cur_col = 0; }
 
   int top_rule_row = R - 3 - nlines;
   if (top_rule_row < 1) top_rule_row = 1;
@@ -506,21 +518,23 @@ void Tui::redraw() {
     } else if (i == R - 1) {
       line = tokens;
     } else if (i > top_rule_row && i < R - 2) {
-      int li = i - top_rule_row - 1;  // which input line this screen row holds
+      int li = i - top_rule_row - 1;  // which physical row this screen row holds
       if (li >= 0 && li < (int)in_lines.size())
-        line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == (int)cur_line, cur_off);
+        line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == cur_line, 0);
     }
     // i == tr_h (the gap) and any overflow input rows are left blank.
     frame += line;
     frame += "\x1b[K";
     if (i != R - 1) frame += "\n";
   }
-  int hw_row = top_rule_row + 2 + (int)cur_line;
-  int cursor_col = 2 + render::display_width(in_lines[cur_line].substr(0, cur_off));
+  int hw_row = top_rule_row + 2 + cur_line;
+  // 1-indexed: 2-char prefix + prefix width + 1. Clamp to C so the caret at the end
+  // of a full-width row stays on the last column instead of wrapping off-screen.
+  int cursor_col = 3 + cur_col;
   if (hw_row < 1) hw_row = 1;
   if (hw_row > R - 1) hw_row = R - 1;
   if (cursor_col > C) cursor_col = C;
-  frame += "\x1b[" + std::to_string(hw_row) + ";" + std::to_string(cursor_col + 1) + "H";
+  frame += "\x1b[" + std::to_string(hw_row) + ";" + std::to_string(cursor_col) + "H";
 
   if (frame == last_frame_ && R == last_rows_) {
     std::cout.flush();
