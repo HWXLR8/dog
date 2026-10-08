@@ -208,8 +208,11 @@ void AgentLoop::maybe_compact() {
 
   nlohmann::json new_msgs = nlohmann::json::array();
   new_msgs.push_back(messages_[0]);  // system prompt, untouched
+  // Fold the older history into a user message (not a second `system`): some chat
+  // templates (e.g. the one vLLM uses here) require the first non-system message to
+  // be a user turn and error out otherwise ("No user query found in messages").
   new_msgs.push_back(
-      {{"role", "system"}, {"content", "[Earlier conversation summary]\n" + res.content}});
+      {{"role", "user"}, {"content", "[Earlier conversation summary]\n" + res.content}});
   for (size_t i = (size_t)tail; i < messages_.size(); i++) new_msgs.push_back(messages_[i]);
   messages_ = std::move(new_msgs);
 
