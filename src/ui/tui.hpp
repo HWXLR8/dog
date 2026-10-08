@@ -115,6 +115,7 @@ private:
   std::string last_frame_;
   int last_rows_ = -1;
   int last_cols_ = -1;
+  long last_tr_size_ = 0;
 
   // Serializes redraw + state mutation (main thread) against the spinner thread.
   std::mutex draw_mu_;

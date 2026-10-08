@@ -486,6 +486,15 @@ void Tui::redraw() {
   long max_up = base > 0 ? base : 0;
   long off = scroll_offset_;
   if (off < 0) off = 0;
+  // While scrolled up, keep the view pinned: as new lines append below the pinned
+  // window they would otherwise push `first` down and shift everything on screen.
+  // Offset them out of `off` so the top line stays put (scroll-back-to-bottom, i.e.
+  // off==0, still follows the live tail).
+  if (off > 0) {
+    long growth = (long)tr.size() - last_tr_size_;
+    if (growth > 0) off += growth;
+  }
+  last_tr_size_ = (long)tr.size();
   if (off > max_up) off = max_up;
   scroll_offset_ = off;  // clamp stored value so PgUp at top is a no-op
   long first = base - off;
