@@ -202,6 +202,7 @@ int main(int argc, char** argv) {
         (void)tui.poll_input();  // absorbs keystrokes; Ctrl-C sets the flag
       }
       th.join();
+      tui.on_turn_end();  // turn is done: stop the spinner
       dog::interrupt_flag.store(false);
     }
   }

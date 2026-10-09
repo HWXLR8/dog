@@ -38,6 +38,7 @@ public:
   bool exit_requested() const { return exit_requested_; }
   bool alt() const { return alt_; }  // true when the alternate screen is active
   void clear_transcript();
+  void on_turn_end();  // turn is over: stop the spinner
 
   // Non-blocking input poll for use while agent runs in background.
   enum class PollResult { kNone, kRedraw, kCancel };
@@ -88,7 +89,7 @@ private:
   bool reasoning_active_ = false;
 
   // Status line state.
-  bool thinking_ = false;
+  bool working_ = false;         // a turn is in progress (model gen or tool work)
   bool answer_started_ = false;  // set once content starts streaming
   std::string reasoning_;  // accumulated reasoning (newlines collapsed)
   std::chrono::steady_clock::time_point think_start_;

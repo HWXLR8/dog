@@ -426,7 +426,7 @@ std::string Tui::status_string() const {
   std::string left;
   if (!status_override_.empty()) {
     left = status_override_;  // explicit transient status (e.g. compaction) wins
-  } else if (thinking_ && !answer_started_) {
+  } else if (working_ && !answer_started_) {
     long el = std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - think_start_)
                    .count();
@@ -558,7 +558,7 @@ void Tui::redraw() {
 
 void Tui::on_model_start() {
   std::lock_guard<std::mutex> lk(draw_mu_);
-  thinking_ = true;
+  working_ = true;
   answer_started_ = false;
   live_out_est_ = 0;
   reasoning_active_ = false;
@@ -599,7 +599,8 @@ void Tui::on_text(const std::string& c) {
 
 void Tui::on_round_end() {
   std::lock_guard<std::mutex> lk(draw_mu_);
-  thinking_ = false;
+  // Re-arm the spinner in case the next round runs tools; on_turn_end turns it off.
+  answer_started_ = false;
   if (reasoning_active_ && !reasoning_.empty()) {
     int C = term_cols();
     Item it;
@@ -631,6 +632,12 @@ void Tui::on_round_end() {
     if (!new_lines.empty()) std::cout << "\n";
     std::cout.flush();
   }
+}
+
+void Tui::on_turn_end() {
+  std::lock_guard<std::mutex> lk(draw_mu_);
+  working_ = false;
+  if (interactive_) redraw();
 }
 
 void Tui::on_tool_call(const std::string& name, const std::string& args, const std::string& result) {
@@ -812,6 +819,7 @@ void Tui::clear_transcript() {
 
 std::string Tui::read_input() {
   std::lock_guard<std::mutex> lk(draw_mu_);
+  working_ = false;  // idle prompt: no turn in progress
   for (;;) {
     int c = 0;
     if (!read_one_byte(&c)) {
