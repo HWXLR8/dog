@@ -264,7 +264,10 @@ bool Tui::read_one_byte(int* c) {
 std::vector<std::string> Tui::render_item(int kind, const std::string& raw, int width) const {
   if (width <= 0) width = 80;
   if (kind == 1) {
-    auto lines = render::markdown(raw, width);
+    // Leave a 1-column guard: a line rendered at exactly `width` (== terminal
+    // cols) parks the cursor at the right margin, and the frame's trailing
+    // \x1b[K then erases that last cell, dropping the line's final character.
+    auto lines = render::markdown(raw, width - 1);
     while (!lines.empty() && lines.front().empty()) lines.erase(lines.begin());
     return lines;
   }
@@ -387,8 +390,8 @@ std::vector<std::string> Tui::render_item(int kind, const std::string& raw, int 
     return lines;
   }
 
-  // system / header
-  auto w = wrap_plain(raw, width);
+  // system / header (1-column guard, see kind 1 above)
+  auto w = wrap_plain(raw, width - 1);
   std::vector<std::string> lines;
   for (auto& l : w) lines.push_back("\x1b[2m\x1b[38;5;245m" + l + "\x1b[0m");
   if (lines.empty()) lines.push_back("");
@@ -411,7 +414,7 @@ std::vector<std::string> Tui::content_lines() const {
     // the spinner redraw otherwise just reuses the cached lines.
     std::string key = live_ + " " + std::to_string(C);
     if (key != live_cache_key_) {
-      live_cached_ = render::markdown(live_, C);
+      live_cached_ = render::markdown(live_, C - 1);
       live_cache_key_ = std::move(key);
     }
     auto& ml = live_cached_;
