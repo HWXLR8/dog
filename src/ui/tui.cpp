@@ -821,11 +821,16 @@ void Tui::clear_transcript() {
 }
 
 std::string Tui::read_input() {
-  std::lock_guard<std::mutex> lk(draw_mu_);
+  std::unique_lock<std::mutex> lk(draw_mu_);
   working_ = false;  // idle prompt: no turn in progress
   for (;;) {
     int c = 0;
-    if (!read_one_byte(&c)) {
+    // Release the lock while blocking on stdin so the spinner thread can
+    // still acquire it and redraw on resize.
+    lk.unlock();
+    bool ok = read_one_byte(&c);
+    lk.lock();
+    if (!ok) {
       exit_requested_ = true;
       std::string s = input_;
       input_.clear();
