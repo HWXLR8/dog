@@ -1,5 +1,5 @@
 CXX      ?= g++
-CXXFLAGS += -std=c++20 -pthread
+CXXFLAGS += -std=c++17 -pthread
 CPPFLAGS += -Isrc
 
 SRC := $(shell find src -name '*.cpp')

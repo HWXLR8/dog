@@ -9,7 +9,11 @@ make        # produces ./dog
 make clean  # remove objects and binary
 ```
 
-Requires g++ (C++20) and libcurl.
+Requires:
+
+- `g++` (C++17)
+- `libcurl`
+- `nlohmann_json` (header-only)
 
 ## Usage
 
