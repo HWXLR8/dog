@@ -969,15 +969,17 @@ bool Tui::apply_esc_bytes() {
   ssize_t r = read(STDIN_FILENO, &b, 1);
   if (r != 1) return 0;
   buf[n++] = b;
-  if (b < 0x20) return n;                        // ESC + control char: complete in 2 bytes
-  if (b != '[' && b != 'O') return n;            // meta key (ESC + letter): 2 bytes total
-  for (;;) {                                     // real CSI/SS3: block until the final byte
-    if (n >= (int)sizeof(buf) - 1) break;        // overflow guard
-    unsigned char c;
-    if (read(STDIN_FILENO, &c, 1) != 1) break;
-    buf[n++] = c;
-    if (c >= 0x40 && c <= 0x7E && c != '[' && c != 'O') break;  // final byte: done
+  if (b == '[' || b == 'O') {                    // real CSI/SS3: block until the final byte
+    for (;;) {
+      if (n >= (int)sizeof(buf) - 1) break;      // overflow guard
+      unsigned char c;
+      if (read(STDIN_FILENO, &c, 1) != 1) break;
+      buf[n++] = c;
+      if (c >= 0x40 && c <= 0x7E && c != '[' && c != 'O') break;  // final byte: done
+    }
   }
+  // 2-byte case (ESC + letter = meta key, or ESC + control char): no more bytes to
+  // drain -- fall through to the meta-key handler (M-f / M-b / M-d) below.
   bool changed = false;
   auto scroll_up = [&]() { scroll_offset_++; changed = true; };
   auto scroll_down = [&]() { scroll_offset_--; if (scroll_offset_ < 0) scroll_offset_ = 0; changed = true; };
