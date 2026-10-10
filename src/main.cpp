@@ -10,7 +10,7 @@
 #include "mcp/mcp.hpp"
 #include "tools/task.hpp"
 #include "tools/tools.hpp"
-#include "ui/tui.hpp"
+#include "ui/ui.hpp"
 #include "util.hpp"
 
 namespace {
@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
   dog::Config cfg = dog::Config::load(config_path);
 
   // The UI owns all rendering; agent/tool/MCP output flows through it.
-  dog::Tui tui(cfg, interactive);
-  auto log = [&tui](const std::string& s) { tui.on_system(s); };
+  dog::Ui screen(cfg, interactive);
+  auto log = [&screen](const std::string& s) { screen.on_system(s); };
 
   dog::ToolRegistry reg;
   dog::register_core_tools(reg, cfg.skills_dir);
@@ -140,18 +140,18 @@ int main(int argc, char** argv) {
   mcp.start(cfg.mcp, reg, log);
 
   dog::UiCallbacks ui;
-  ui.text = [&tui](const std::string& s) { tui.on_text(s); };
-  ui.reasoning = [&tui](const std::string& r) { tui.on_reasoning(r); };
-  ui.model_start = [&tui]() { tui.on_model_start(); };
-  ui.round_end = [&tui]() { tui.on_round_end(); };
-  ui.usage = [&tui](long a, long b, long c) { tui.on_usage(a, b, c); };
-  ui.status = [&tui](const std::string& s) { tui.on_status(s); };
-  ui.images = [&tui](const std::vector<dog::ImagePart>& imgs) { tui.on_images(imgs); };
-  ui.tool_call = [&tui](const std::string& n, const std::string& a, const std::string& r) {
-    tui.on_tool_call(n, a, r);
+  ui.text = [&screen](const std::string& s) { screen.on_text(s); };
+  ui.reasoning = [&screen](const std::string& r) { screen.on_reasoning(r); };
+  ui.model_start = [&screen]() { screen.on_model_start(); };
+  ui.round_end = [&screen]() { screen.on_round_end(); };
+  ui.usage = [&screen](long a, long b, long c) { screen.on_usage(a, b, c); };
+  ui.status = [&screen](const std::string& s) { screen.on_status(s); };
+  ui.images = [&screen](const std::vector<dog::ImagePart>& imgs) { screen.on_images(imgs); };
+  ui.tool_call = [&screen](const std::string& n, const std::string& a, const std::string& r) {
+    screen.on_tool_call(n, a, r);
   };
-  ui.system = [&tui](const std::string& s) { tui.on_system(s); };
-  ui.confirm = [&tui](const std::string& p) { return tui.confirm(p); };
+  ui.system = [&screen](const std::string& s) { screen.on_system(s); };
+  ui.confirm = [&screen](const std::string& p) { return screen.confirm(p); };
 
   dog::AgentLoop agent(cfg, &reg, read_system_file(cfg.system_file), plan, std::move(ui));
 
@@ -163,19 +163,19 @@ int main(int argc, char** argv) {
   }
 
   for (;;) {
-    std::string line = tui.read_input();
-    if (tui.exit_requested()) break;
+    std::string line = screen.read_input();
+    if (screen.exit_requested()) break;
     std::string t = dog::util::trim(line);
     if (t.empty()) continue;
     if (t == "/exit" || t == "/quit") break;
     if (t == "/help") {
-      tui.on_system("commands: /help  /clear  /plan  /exit");
+      screen.on_system("commands: /help  /clear  /plan  /exit");
       continue;
     }
     if (t == "/clear") {
       agent.clear_context();
-      tui.clear_transcript();
-      tui.on_system("context cleared");
+      screen.clear_transcript();
+      screen.on_system("context cleared");
       continue;
     }
     if (t == "/plan") {
@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
         agent.enter_plan_mode();
       continue;
     }
-    tui.user_message(t);
+    screen.user_message(t);
     {
       // Extract @-referenced image attachments before the turn; the text keeps
       // only the user's words.
@@ -199,10 +199,10 @@ int main(int argc, char** argv) {
       });
       while (!done.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        (void)tui.poll_input();  // absorbs keystrokes; Ctrl-C sets the flag
+        (void)screen.poll_input();  // absorbs keystrokes; Ctrl-C sets the flag
       }
       th.join();
-      tui.on_turn_end();  // turn is done: stop the spinner
+      screen.on_turn_end();  // turn is done: stop the spinner
       dog::interrupt_flag.store(false);
     }
   }

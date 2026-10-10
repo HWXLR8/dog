@@ -15,10 +15,10 @@ namespace dog {
 // (alternate screen buffer, raw input) and keeps a scrolling transcript on top
 // with a live status line and an editable input box pinned to the bottom row.
 // In non-interactive mode (one-shot) it streams to stdout instead.
-class Tui {
+class Ui {
 public:
-  Tui(const Config& cfg, bool interactive);
-  ~Tui();
+  Ui(const Config& cfg, bool interactive);
+  ~Ui();
 
   // --- Agent-facing hooks (fed by UiCallbacks). ---
   void on_text(const std::string& chunk);

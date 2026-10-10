@@ -1,4 +1,4 @@
-#include "ui/tui.hpp"
+#include "ui/ui.hpp"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -179,7 +179,7 @@ std::string spinner_thinking(const std::string& reasoning, long ms, int cols) {
 
 }  // namespace
 
-Tui::Tui(const Config& cfg, bool interactive) : cfg_(cfg), interactive_(interactive) {
+Ui::Ui(const Config& cfg, bool interactive) : cfg_(cfg), interactive_(interactive) {
   if (interactive_) {
     start_screen();
     header_raw_ = "dog   " + cfg_.model + "   " + cfg_.base_url;
@@ -193,13 +193,13 @@ Tui::Tui(const Config& cfg, bool interactive) : cfg_(cfg), interactive_(interact
     // Start the timer-driven spinner only after initial setup so it never races
     // the constructor's first redraw.
     spin_run_ = true;
-    spin_ = std::thread(&Tui::spinner_loop, this);
+    spin_ = std::thread(&Ui::spinner_loop, this);
   }
 }
 
-Tui::~Tui() { end_screen(); }
+Ui::~Ui() { end_screen(); }
 
-void Tui::set_raw(bool on) {
+void Ui::set_raw(bool on) {
   static termios saved;
   static bool has_saved = false;
   if (on) {
@@ -218,7 +218,7 @@ void Tui::set_raw(bool on) {
   }
 }
 
-void Tui::start_screen() {
+void Ui::start_screen() {
   if (!is_tty_out() || !::isatty(STDIN_FILENO)) return;
   std::cout << "\x1b[?1049h"  // alt screen
             << "\x1b[2J"       // clear
@@ -230,7 +230,7 @@ void Tui::start_screen() {
   alt_ = true;
 }
 
-void Tui::end_screen() {
+void Ui::end_screen() {
   if (!alt_) return;
   spin_run_ = false;
   if (spin_.joinable()) spin_.join();
@@ -240,18 +240,18 @@ void Tui::end_screen() {
   alt_ = false;
 }
 
-int Tui::term_rows() const {
+int Ui::term_rows() const {
   winsize ws{};
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return ws.ws_row;
   return 24;
 }
-int Tui::term_cols() const {
+int Ui::term_cols() const {
   winsize ws{};
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
   return 80;
 }
 
-bool Tui::read_one_byte(int* c) {
+bool Ui::read_one_byte(int* c) {
   char ch = 0;
   ssize_t n = read(STDIN_FILENO, &ch, 1);
   if (n == 1) {
@@ -261,7 +261,7 @@ bool Tui::read_one_byte(int* c) {
   return false;
 }
 
-std::vector<std::string> Tui::render_item(int kind, const std::string& raw, int width) const {
+std::vector<std::string> Ui::render_item(int kind, const std::string& raw, int width) const {
   if (width <= 0) width = 80;
   if (kind == 1) {
     // Leave a 1-column guard: a line rendered at exactly `width` (== terminal
@@ -398,7 +398,7 @@ std::vector<std::string> Tui::render_item(int kind, const std::string& raw, int 
   return lines;
 }
 
-std::vector<std::string> Tui::content_lines() const {
+std::vector<std::string> Ui::content_lines() const {
   int C = term_cols();
   std::vector<std::string> out;
   for (size_t i = 0; i < items_.size(); i++) {
@@ -425,7 +425,7 @@ std::vector<std::string> Tui::content_lines() const {
   return out;
 }
 
-std::string Tui::status_string() const {
+std::string Ui::status_string() const {
   std::string left;
   if (!status_override_.empty()) {
     left = status_override_;  // explicit transient status (e.g. compaction) wins
@@ -439,7 +439,7 @@ std::string Tui::status_string() const {
   return left;
 }
 
-std::string Tui::token_line_str() const {
+std::string Ui::token_line_str() const {
   // Per-turn numbers = everything since the last user prompt (all rounds), plus
   // the in-progress round's live output estimate (reasoning + streamed text).
   long in_show = turn_in_;
@@ -448,7 +448,7 @@ std::string Tui::token_line_str() const {
   return token_line(true, in_show, out_show, session_in_, s_out, ctx_used_, cfg_.context_window);
 }
 
-void Tui::redraw() {
+void Ui::redraw() {
   if (!alt_) return;
   int R = term_rows();
   int C = term_cols();
@@ -559,7 +559,7 @@ void Tui::redraw() {
 
 // --- Agent-facing hooks ---
 
-void Tui::on_model_start() {
+void Ui::on_model_start() {
   std::lock_guard<std::mutex> lk(draw_mu_);
   working_ = true;
   answer_started_ = false;
@@ -574,7 +574,7 @@ void Tui::on_model_start() {
     one_shot_thinking_line();
 }
 
-void Tui::on_reasoning(const std::string& c) {
+void Ui::on_reasoning(const std::string& c) {
   if (c.empty()) return;
   std::lock_guard<std::mutex> lk(draw_mu_);
   reasoning_active_ = true;
@@ -588,7 +588,7 @@ void Tui::on_reasoning(const std::string& c) {
   }
 }
 
-void Tui::on_text(const std::string& c) {
+void Ui::on_text(const std::string& c) {
   if (c.empty()) return;
   std::lock_guard<std::mutex> lk(draw_mu_);
   answer_started_ = true;
@@ -600,7 +600,7 @@ void Tui::on_text(const std::string& c) {
   // (one-shot: buffered, rendered on round_end to keep markdown clean.)
 }
 
-void Tui::on_round_end() {
+void Ui::on_round_end() {
   std::lock_guard<std::mutex> lk(draw_mu_);
   // Re-arm the spinner in case the next round runs tools; on_turn_end turns it off.
   answer_started_ = false;
@@ -637,13 +637,13 @@ void Tui::on_round_end() {
   }
 }
 
-void Tui::on_turn_end() {
+void Ui::on_turn_end() {
   std::lock_guard<std::mutex> lk(draw_mu_);
   working_ = false;
   if (interactive_) redraw();
 }
 
-void Tui::on_tool_call(const std::string& name, const std::string& args, const std::string& result) {
+void Ui::on_tool_call(const std::string& name, const std::string& args, const std::string& result) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();
   Item it;
@@ -670,7 +670,7 @@ void Tui::on_tool_call(const std::string& name, const std::string& args, const s
   }
 }
 
-void Tui::on_system(const std::string& msg) {
+void Ui::on_system(const std::string& msg) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();
   Item it;
@@ -686,7 +686,7 @@ void Tui::on_system(const std::string& msg) {
   }
 }
 
-void Tui::on_usage(long in, long out, long total) {
+void Ui::on_usage(long in, long out, long total) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   (void)total;
   session_in_ += in;
@@ -705,7 +705,7 @@ void Tui::on_usage(long in, long out, long total) {
   }
 }
 
-void Tui::on_status(const std::string& msg) {
+void Ui::on_status(const std::string& msg) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   status_override_ = msg;
   if (interactive_) {
@@ -716,7 +716,7 @@ void Tui::on_status(const std::string& msg) {
   }
 }
 
-void Tui::on_images(const std::vector<ImagePart>& images) {
+void Ui::on_images(const std::vector<ImagePart>& images) {
   if (images.empty()) return;
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();
@@ -738,7 +738,7 @@ void Tui::on_images(const std::vector<ImagePart>& images) {
   }
 }
 
-bool Tui::confirm(const std::string& plan) {
+bool Ui::confirm(const std::string& plan) {
   if (!interactive_) {
     std::cout << "(non-interactive: plan auto-approved)\n";
     return true;
@@ -790,7 +790,7 @@ bool Tui::confirm(const std::string& plan) {
 
 // --- Interactive input ---
 
-void Tui::user_message(const std::string& text) {
+void Ui::user_message(const std::string& text) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();
   Item it;
@@ -806,7 +806,7 @@ void Tui::user_message(const std::string& text) {
   redraw();
 }
 
-void Tui::clear_transcript() {
+void Ui::clear_transcript() {
   std::lock_guard<std::mutex> lk(draw_mu_);
   items_.clear();
   scroll_offset_ = 0;
@@ -820,7 +820,7 @@ void Tui::clear_transcript() {
   if (interactive_) redraw();
 }
 
-std::string Tui::read_input() {
+std::string Ui::read_input() {
   std::unique_lock<std::mutex> lk(draw_mu_);
   working_ = false;  // idle prompt: no turn in progress
   for (;;) {
@@ -876,7 +876,7 @@ std::string Tui::read_input() {
   }
 }
 
-void Tui::consume_paste(std::string pre) {
+void Ui::consume_paste(std::string pre) {
   input_.insert(cursor_, pre);
   cursor_ += pre.size();
   const std::string end_marker = "\x1b[201~";  // bracketed paste end
@@ -898,7 +898,7 @@ void Tui::consume_paste(std::string pre) {
   }
 }
 
-bool Tui::stdin_ready(int ms) {
+bool Ui::stdin_ready(int ms) {
   fd_set fds;
   FD_ZERO(&fds);
   FD_SET(STDIN_FILENO, &fds);
@@ -910,7 +910,7 @@ bool Tui::stdin_ready(int ms) {
 // backspace / ESC sequences). Identical for the idle prompt and the live-turn
 // poll so every keybinding works in both modes. Caller holds draw_mu_. The leading
 // ESC, when present, has already been consumed by the caller's read_one_byte.
-bool Tui::apply_edit_key(int c) {
+bool Ui::apply_edit_key(int c) {
   if (c == 0x7f || c == 0x08) {  // Backspace / DEL
     if (cursor_ > 0) {
       size_t from = rune_before(input_, cursor_);
@@ -966,7 +966,7 @@ bool Tui::apply_edit_key(int c) {
 // Handles bracketed paste, emacs meta keys (M-f / M-b / M-d), Shift+Enter, SGR
 // mouse, and cursor/scroll sequences. Caller holds draw_mu_. Returns true if the
 // input box or scroll position changed.
-bool Tui::apply_esc_bytes() {
+bool Ui::apply_esc_bytes() {
   unsigned char buf[64] = {0};
   int n = 0;
   // Wait for the byte after ESC; if none, it was a lone ESC or meta key.
@@ -1111,7 +1111,7 @@ bool Tui::apply_esc_bytes() {
 // Apply a single keystroke read during a live turn to the input box. Returns the
 // poll outcome (kCancel on Ctrl-C, kRedraw if the box changed). Delegates all
 // editing to apply_edit_key so it stays in lockstep with the idle prompt.
-Tui::PollResult Tui::handle_poll_byte(int c) {
+Ui::PollResult Ui::handle_poll_byte(int c) {
   if (c == 0x03) {  // Ctrl-C: request a clean interrupt of the running turn
     util::request_interrupt();
     return PollResult::kCancel;
@@ -1125,7 +1125,7 @@ Tui::PollResult Tui::handle_poll_byte(int c) {
   return PollResult::kNone;
 }
 
-Tui::PollResult Tui::poll_input() {
+Ui::PollResult Ui::poll_input() {
   // Drive cadence off stdin readiness (tiny 1ms wait) instead of a fixed sleep,
   // and drain EVERY available keystroke per wake so rapid typing is applied
   // immediately rather than one byte per tick. This is what keeps the input box
@@ -1144,7 +1144,7 @@ Tui::PollResult Tui::poll_input() {
   }
 }
 
-void Tui::spinner_loop() {
+void Ui::spinner_loop() {
   while (spin_run_.load()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     std::lock_guard<std::mutex> lk(draw_mu_);
@@ -1152,7 +1152,7 @@ void Tui::spinner_loop() {
   }
 }
 
-void Tui::one_shot_thinking_line() {
+void Ui::one_shot_thinking_line() {
   if (!is_tty_out()) return;
   int C = term_cols();
   long el = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1162,7 +1162,7 @@ void Tui::one_shot_thinking_line() {
   one_shot_line_ = true;
 }
 
-void Tui::one_shot_thinking_clear() {
+void Ui::one_shot_thinking_clear() {
   if (one_shot_line_) {
     std::cout << "\r\x1b[K\n";
     one_shot_line_ = false;
