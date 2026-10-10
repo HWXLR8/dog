@@ -379,8 +379,14 @@ bool AgentLoop::run_turn(const std::string& user_input,
       std::string result = util::sanitize_binary(dispatch_tool(tc));
       if (ui_.tool_call) ui_.tool_call(tc.name, tc.args_json, result);
       ImagePart im;
-      if (image_from_result(result, &im)) pending_images.push_back(std::move(im));
-      messages_.push_back({{"role", "tool"}, {"tool_call_id", tc.id}, {"content", result}});
+      std::string stored = result;
+      if (image_from_result(result, &im)) {
+        pending_images.push_back(std::move(im));
+        // The image is delivered as its own image_url part below; keep the
+        // (text-only) tool message small by dropping the raw base64 payload.
+        stored = "[image attached; see the image in the next message]";
+      }
+      messages_.push_back({{"role", "tool"}, {"tool_call_id", tc.id}, {"content", stored}});
     }
     if (!pending_images.empty()) {
       if (ui_.images) ui_.images(pending_images);

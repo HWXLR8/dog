@@ -3,6 +3,7 @@
 #include "tools/search.hpp"
 #include "tools/skill.hpp"
 #include "tools/shell.hpp"
+#include "tools/screenshot.hpp"
 #include "tools/web.hpp"
 
 namespace dog {
@@ -13,6 +14,7 @@ void register_core_tools(ToolRegistry& r, const std::string& skills_dir) {
   register_search_tools(r);
   register_web_tools(r);
   register_skills_tools(r, skills_dir);
+  register_screenshot_tool(r);
 }
 
 }  // namespace dog
