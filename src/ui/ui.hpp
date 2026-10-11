@@ -54,6 +54,7 @@ private:
   PollResult handle_poll_byte(int c);
   bool apply_edit_key(int c);
   bool apply_esc_bytes();
+  bool history_nav(int dir);  // dir: -1 = up (older), +1 = down (newer)
   std::vector<std::string> content_lines() const;
   std::string status_string() const;
   std::string token_line_str() const;
@@ -104,6 +105,10 @@ private:
   size_t cursor_ = 0;
   bool exit_requested_ = false;
   std::string kill_ring_;  // last text killed (Ctrl-K / M-d), yanked by Ctrl-Y
+  // In-memory prompt history (up/down arrows cycle through these, bash-style).
+  std::vector<std::string> history_;
+  int hist_idx_ = -1;  // -1 = free editing; else index into history_
+  std::string suspended_input_;  // buffer before navigation began (restored on Down past newest)
 
   // Scroll. 0 = at bottom (auto-follow). Positive = scrolled up N lines.
   int scroll_offset_ = 0;

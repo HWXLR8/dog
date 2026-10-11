@@ -844,6 +844,10 @@ std::string Ui::read_input() {
     // behaves identically at the idle prompt and while the agent is working.
     if (c == '\r') {
       std::string s = input_;
+      hist_idx_ = -1;  // a submit leaves history navigation
+      suspended_input_.clear();
+      if (!s.empty() && (history_.empty() || history_.back() != s))
+        history_.push_back(s);  // in-memory only; skip consecutive duplicates
       input_.clear();
       cursor_ = 0;
       redraw();
@@ -962,6 +966,37 @@ bool Ui::apply_edit_key(int c) {
   return false;
 }
 
+bool Ui::history_nav(int dir) {
+  if (dir < 0) {  // Up: go older (toward newest first). Start from current buffer.
+    if (history_.empty()) return false;
+    if (hist_idx_ == -1) {  // begin navigating: save the free buffer
+      suspended_input_ = input_;
+      hist_idx_ = (int)history_.size() - 1;
+    } else if (hist_idx_ > 0) {
+      hist_idx_--;
+    } else {
+      return false;  // already at the newest
+    }
+    input_ = history_[hist_idx_];
+    cursor_ = input_.size();
+    return true;
+  }
+  // Down: go newer (toward current/freest).
+  if (hist_idx_ == -1) return false;  // already editing freely
+  if (hist_idx_ < (int)history_.size() - 1) {
+    hist_idx_++;
+    input_ = history_[hist_idx_];
+    cursor_ = input_.size();
+    return true;
+  }
+  // Past the newest: restore the free buffer and stop navigating.
+  hist_idx_ = -1;
+  input_ = suspended_input_;
+  cursor_ = input_.size();
+  suspended_input_.clear();
+  return true;
+}
+
 // Parse an ANSI escape sequence whose leading ESC has already been consumed.
 // Handles bracketed paste, emacs meta keys (M-f / M-b / M-d), Shift+Enter, SGR
 // mouse, and cursor/scroll sequences. Caller holds draw_mu_. Returns true if the
@@ -1043,8 +1078,8 @@ bool Ui::apply_esc_bytes() {
       while (i < n && buf[i] != 0x1b) i++;
     } else if (buf[0] == '[') {
       char p = (char)buf[1]; i = 2;
-      if (p == 'A') scroll_up();
-      else if (p == 'B') scroll_down();
+      if (p == 'A') { if (history_nav(-1)) changed = true; }
+      else if (p == 'B') { if (history_nav(+1)) changed = true; }
       else if (p == 'D') back();
       else if (p == 'C') fwd();
       else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
