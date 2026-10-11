@@ -30,6 +30,14 @@ std::string read_system_file(const std::string& path) {
   return ss.str();
 }
 
+std::string read_agents_file() {
+  std::ifstream f("AGENTS.md");
+  if (!f.good()) return "";
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
 void print_usage() {
   std::cout << "usage: dog [options] [prompt]\n"
             << "  (no prompt)      interactive session\n"
@@ -153,7 +161,10 @@ int main(int argc, char** argv) {
   ui.system = [&screen](const std::string& s) { screen.on_system(s); };
   ui.confirm = [&screen](const std::string& p) { return screen.confirm(p); };
 
-  dog::AgentLoop agent(cfg, &reg, read_system_file(cfg.system_file), plan, std::move(ui));
+  std::string system_prompt = read_system_file(cfg.system_file);
+  std::string agents = read_agents_file();
+  if (!agents.empty()) system_prompt += "\n\n# AGENTS.md (repository instructions)\n" + agents;
+  dog::AgentLoop agent(cfg, &reg, std::move(system_prompt), plan, std::move(ui));
 
   if (!interactive) {
     std::string text = one_shot;
