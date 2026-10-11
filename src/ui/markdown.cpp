@@ -379,13 +379,28 @@ std::vector<std::string> markdown(const std::string& text, int width) {
       auto c = split_cells(r);
       if ((int)c.size() > ncols) ncols = (int)c.size();
     }
-    std::vector<int> cw(ncols, 0);
+    std::vector<int> cw(ncols, 1);
     for (int c = 0; c < ncols; c++) {
       if (c < (int)hdr.size()) cw[c] = std::max(cw[c], display_width(hdr[c]));
       for (auto& r : table_data) {
         auto cells = split_cells(r);
         if (c < (int)cells.size()) cw[c] = std::max(cw[c], display_width(cells[c]));
       }
+    }
+    // Constrain the sum of column widths so the whole table fits the terminal
+    // (each column costs cw + 4 columns of border/padding, plus 1 outer edge).
+    // Trim the widest columns first, never below 1, so narrow columns survive.
+    int cap = width - 4 * ncols - 1;
+    if (cap < ncols) cap = ncols;
+    int sum = 0;
+    for (int c = 0; c < ncols; c++) sum += cw[c];
+    while (sum > cap) {
+      int best = -1;
+      for (int c = 0; c < ncols; c++)
+        if (cw[c] > 1 && (best == -1 || cw[c] > cw[best])) best = c;
+      if (best == -1) break;
+      cw[best]--;
+      sum--;
     }
     auto make_sep = [&](const char* l, const char* m, const char* r) -> std::string {
       std::string s(l);
@@ -395,29 +410,37 @@ std::vector<std::string> markdown(const std::string& text, int width) {
       }
       return s;
     };
-    auto render_row = [&](const std::vector<std::string>& cells, bool is_header) -> std::string {
+    auto render_row = [&](const std::vector<std::string>& cells, bool is_header)
+        -> std::vector<std::string> {
       Style base;
       base.bold = is_header;
-      std::string s;
+      // Wrap each cell to its column width; stack so borders stay aligned.
+      std::vector<std::vector<std::string>> wrapped(ncols);
+      int maxlines = 1;
       for (int c = 0; c < ncols; c++) {
-        s += "\xe2\x94\x82 ";
-        int content_w = 0;
-        if (c < (int)cells.size()) {
-          auto rendered = render_sc(parse_inline(cells[c], base));
-          content_w = display_width(strip_ansi(rendered));
-          s += rendered;
-        }
-        for (int i = content_w; i < cw[c]; i++) s += ' ';
-        s += " ";
+        wrapped[c] = wrap(parse_inline(c < (int)cells.size() ? cells[c] : "", base), cw[c]);
+        maxlines = std::max(maxlines, (int)wrapped[c].size());
       }
-      s += "\xe2\x94\x82";
-      return s;
+      std::vector<std::string> rows(maxlines);
+      for (int j = 0; j < maxlines; j++) {
+        rows[j] = "\xe2\x94\x82";  // leading border
+        for (int c = 0; c < ncols; c++) {
+          std::string content = (j < (int)wrapped[c].size()) ? wrapped[c][j] : "";
+          int cwcell = display_width(strip_ansi(content));
+          std::string pad;
+          for (int i = cwcell; i < cw[c]; i++) pad += ' ';
+          rows[j] += " " + content + pad + " ";
+          if (c < ncols - 1) rows[j] += "\xe2\x94\x82";  // separator
+        }
+        rows[j] += "\xe2\x94\x82";  // trailing border
+      }
+      return rows;
     };
     out.push_back(make_sep("\xe2\x94\x8c", "\xe2\x94\xac", "\xe2\x94\x90"));
-    out.push_back(render_row(hdr, true));
+    for (auto& l : render_row(hdr, true)) out.push_back(l);
     out.push_back(make_sep("\xe2\x94\x9c", "\xe2\x94\xbc", "\xe2\x94\xa4"));
     for (size_t ri = 0; ri < table_data.size(); ri++) {
-      out.push_back(render_row(split_cells(table_data[ri]), false));
+      for (auto& l : render_row(split_cells(table_data[ri]), false)) out.push_back(l);
       if (ri + 1 < table_data.size())
         out.push_back(make_sep("\xe2\x94\x9c", "\xe2\x94\xbc", "\xe2\x94\xa4"));
       else
