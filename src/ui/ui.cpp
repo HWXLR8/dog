@@ -276,7 +276,10 @@ std::vector<std::string> Ui::render_item(int kind, const std::string& raw, int w
   if (kind == 0) {  // user
     // The "> " / "  " prefix is 2 columns; wrap content to the remaining width so
     // the line never exceeds the terminal width (else it hard-wraps mid-word).
-    auto w = wrap_plain(raw, width - 2);
+    // width-3 (not width-2) keeps a 1-column guard: a line rendered at exactly
+    // `width` parks the cursor at the right margin and the frame's trailing
+    // \x1b[K erases its last cell, dropping the line's final character.
+    auto w = wrap_plain(raw, width - 3);
     std::vector<std::string> lines;
     for (size_t i = 0; i < w.size(); i++)
       lines.push_back(i == 0 ? "\x1b[1m\x1b[38;5;39m>\x1b[0m " + w[i] : "  " + w[i]);
