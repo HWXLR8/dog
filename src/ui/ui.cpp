@@ -223,7 +223,8 @@ void Ui::start_screen() {
   std::cout << "\x1b[?1049h"  // alt screen
             << "\x1b[2J"       // clear
             << "\x1b[H"        // home
-            << "\x1b[?1006h"   // SGR mouse mode
+            << "\x1b[?1006h"  // SGR mouse encoding
+            << "\x1b[?1002h"  // button-event mouse reporting (wheel => SGR 64/65)
             << "\x1b[?2004h";  // bracketed paste mode
   std::cout.flush();
   set_raw(true);
@@ -235,7 +236,7 @@ void Ui::end_screen() {
   spin_run_ = false;
   if (spin_.joinable()) spin_.join();
   set_raw(false);
-  std::cout << "\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1049l\n";
+  std::cout << "\x1b[0m\x1b[?25h\x1b[?1002l\x1b[?1006l\x1b[?1049l\n";
   std::cout.flush();
   alt_ = false;
 }
