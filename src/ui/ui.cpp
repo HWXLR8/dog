@@ -223,8 +223,7 @@ void Ui::start_screen() {
   std::cout << "\x1b[?1049h"  // alt screen
             << "\x1b[2J"       // clear
             << "\x1b[H"        // home
-            << "\x1b[?1006h"  // SGR mouse encoding
-            << "\x1b[?1002h"  // button-event mouse reporting (wheel => SGR 64/65)
+            << "\x1b[?1006h"   // SGR mouse mode
             << "\x1b[?2004h";  // bracketed paste mode
   std::cout.flush();
   set_raw(true);
@@ -236,7 +235,7 @@ void Ui::end_screen() {
   spin_run_ = false;
   if (spin_.joinable()) spin_.join();
   set_raw(false);
-  std::cout << "\x1b[0m\x1b[?25h\x1b[?1002l\x1b[?1006l\x1b[?1049l\n";
+  std::cout << "\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1049l\n";
   std::cout.flush();
   alt_ = false;
 }
@@ -950,6 +949,12 @@ bool Ui::apply_edit_key(int c) {
     input_.insert(cursor_, kill_ring_);
     cursor_ += kill_ring_.size();
     return true;
+  } else if (c == 0x10) {  // Ctrl-P: history up (older)
+    history_nav(-1);
+    return true;
+  } else if (c == 0x0e) {  // Ctrl-N: history down (newer)
+    history_nav(+1);
+    return true;
   } else if (c == 0x0f) {  // Ctrl-O: toggle thinking visibility
     show_reasoning_ = !show_reasoning_;
     int C = term_cols();
@@ -1082,8 +1087,8 @@ bool Ui::apply_esc_bytes() {
       while (i < n && buf[i] != 0x1b) i++;
     } else if (buf[0] == '[') {
       char p = (char)buf[1]; i = 2;
-      if (p == 'A') { if (history_nav(-1)) changed = true; }
-      else if (p == 'B') { if (history_nav(+1)) changed = true; }
+      if (p == 'A') scroll_up();
+      else if (p == 'B') scroll_down();
       else if (p == 'D') back();
       else if (p == 'C') fwd();
       else if (p == 'H') { if (cursor_ != 0) { cursor_ = 0; changed = true; } }
