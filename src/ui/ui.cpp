@@ -538,8 +538,8 @@ void Ui::redraw() {
         line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == cur_line, 0);
     }
     // i == tr_h (the gap) and any overflow input rows are left blank.
+    frame += "\x1b[2K";  // clear whole row so a shorter line leaves no old tail
     frame += line;
-    frame += "\x1b[K";
     if (i != R - 1) frame += "\n";
   }
   int hw_row = top_rule_row + 2 + cur_line;
