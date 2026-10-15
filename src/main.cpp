@@ -201,6 +201,12 @@ int main(int argc, char** argv) {
       // Extract @-referenced image attachments before the turn; the text keeps
       // only the user's words.
       std::vector<dog::ImagePart> attached = extract_image_attachments(t);
+      // Merge in any images pasted via Ctrl-V.
+      auto pasted = screen.pop_pending_images();
+      if (!pasted.empty()) {
+        attached.insert(attached.end(), pasted.begin(), pasted.end());
+        screen.on_images(attached);  // transcript confirmation of what the model sees
+      }
       // Start each turn with a clear interrupt flag; the TUI sets it on Ctrl-C.
       dog::interrupt_flag.store(false);
       std::atomic<bool> done{false};

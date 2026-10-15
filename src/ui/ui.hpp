@@ -11,6 +11,14 @@
 
 namespace dog {
 
+// Clipboard read result for the Ctrl-V handler: an image (is_image) or text.
+struct ClipData {
+  bool is_image = false;
+  std::string mime;
+  std::string data;  // image bytes when is_image
+  std::string text;  // text when !is_image
+};
+
 // Terminal UI for the dog. In interactive mode it takes over the screen
 // (alternate screen buffer, raw input) and keeps a scrolling transcript on top
 // with a live status line and an editable input box pinned to the bottom row.
@@ -34,6 +42,8 @@ public:
 
   // --- Interactive-only. ---
   void user_message(const std::string& text);  // record a submitted user line
+  // Drains (and clears) any images attached to the current line via Ctrl-V.
+  std::vector<ImagePart> pop_pending_images();
   std::string read_input();                    // editable line; "" on EOF
   bool exit_requested() const { return exit_requested_; }
   bool alt() const { return alt_; }  // true when the alternate screen is active
@@ -65,6 +75,9 @@ private:
   void one_shot_thinking_clear();
   void consume_paste(std::string pre);  // drain a bracketed paste into input_ literally
   void spinner_loop();  // timer-driven redraws so the status line animates
+  ClipData read_clipboard();          // shell out to wl-paste; image or text
+  void attach_image(const ClipData&); // record an attached image (re-render)
+  std::string attach_line() const;    // one-liner for attached images ("" if none)
 
   struct Item {
     int kind = 0;  // 0 user, 1 assistant, 2 tool, 3 system
@@ -104,6 +117,7 @@ private:
   std::string input_;
   size_t cursor_ = 0;
   bool exit_requested_ = false;
+  std::vector<ImagePart> pending_images_;  // images attached via Ctrl-V this line
   std::string kill_ring_;  // last text killed (Ctrl-K / M-d), yanked by Ctrl-Y
   // In-memory prompt history (up/down arrows cycle through these, bash-style).
   std::vector<std::string> history_;

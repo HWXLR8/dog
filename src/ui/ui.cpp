@@ -1,6 +1,7 @@
 #include "ui/ui.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <sys/ioctl.h>
@@ -14,6 +15,16 @@ namespace dog {
 namespace {
 
 const char* kSpinner[10] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+
+// Human-readable byte count: "47031" -> "46.0 KB".
+std::string fmt_bytes(size_t n) {
+  if (n < 1000) return std::to_string(n) + " B";
+  if (n < 1000000)
+    return std::to_string((n * 10 + 50000) / 100000) +
+           "." + std::to_string((n * 10 % 100000) / 10000) + " KB";
+  return std::to_string((n * 10 + 500000) / 1000000) +
+         "." + std::to_string((n * 10 % 1000000) / 100000) + " MB";
+}
 
 bool is_tty_out() { return ::isatty(STDOUT_FILENO) != 0; }
 
@@ -198,6 +209,82 @@ Ui::Ui(const Config& cfg, bool interactive) : cfg_(cfg), interactive_(interactiv
 }
 
 Ui::~Ui() { end_screen(); }
+
+// Shell out to wl-paste (Wayland) to read the clipboard. Returns an image part
+// (from the first image/* target) or, failing that, the text clipboard. The
+// popen + Wayland IPC round-trip is run by the caller OUTSIDE draw_mu_ so the
+// spinner thread is not blocked on it.
+ClipData Ui::read_clipboard() {
+  ClipData out;
+  const char* wayland = std::getenv("WAYLAND_DISPLAY");
+  if (!wayland || !*wayland) return out;  // not Wayland: nothing to read
+  // 1. Discover targets: one MIME type per line.
+  std::string list;
+  if (FILE* f = popen("wl-paste --list-types 2>/dev/null", "r")) {
+    char buf[256];
+    while (size_t r = std::fread(buf, 1, sizeof buf, f))
+      list.append(buf, r);
+    pclose(f);
+  }
+  // 2. Prefer image/png, else the first image/* type.
+  std::string best;
+  for (auto& line : util::split_lines(list)) {
+    std::string t = util::trim(line);
+    if (t.compare(0, 6, "image/") != 0) continue;
+    if (t == "image/png") { best = t; break; }
+    if (best.empty()) best = t;
+  }
+  if (!best.empty()) {
+    std::string cmd = "wl-paste -t '" + best + "' --no-newline 2>/dev/null";
+    if (FILE* f = popen(cmd.c_str(), "r")) {
+      char buf[8192];
+      while (size_t r = std::fread(buf, 1, sizeof buf, f))
+        out.data.append(buf, r);
+      pclose(f);
+    }
+    if (!out.data.empty()) {
+      out.is_image = true;
+      out.mime = best;
+      return out;
+    }
+  }
+  // 3. No image: fall back to the text clipboard.
+  if (FILE* f = popen("wl-paste --no-newline 2>/dev/null", "r")) {
+    char buf[8192];
+    while (size_t r = std::fread(buf, 1, sizeof buf, f))
+      out.text.append(buf, r);
+    pclose(f);
+  }
+  return out;
+}
+
+void Ui::attach_image(const ClipData& c) {
+  ImagePart im;
+  im.mime = c.mime.empty() ? "image/png" : c.mime;
+  im.data = c.data;
+  im.path = "clipboard";
+  pending_images_.push_back(std::move(im));
+  redraw();
+}
+
+std::string Ui::attach_line() const {
+  if (pending_images_.empty()) return "";
+  std::string s;
+  for (size_t i = 0; i < pending_images_.size(); i++) {
+    if (i) s += "  ";
+    s += (pending_images_[i].mime.empty() ? "image" : pending_images_[i].mime) +
+         " \xc2\xb7 " + fmt_bytes(pending_images_[i].data.size());
+  }
+  return "  \xF0\x9F\x93\x8E " + s;  // 2-space indent + paperclip (ANSI applied at draw)
+}
+
+std::vector<ImagePart> Ui::pop_pending_images() {
+  std::lock_guard<std::mutex> lk(draw_mu_);
+  auto out = std::move(pending_images_);
+  pending_images_.clear();
+  redraw();
+  return out;
+}
 
 void Ui::set_raw(bool on) {
   static termios saved;
@@ -393,6 +480,14 @@ std::vector<std::string> Ui::render_item(int kind, const std::string& raw, int w
     return lines;
   }
 
+  if (kind == 6) {  // clipboard image attach: raw = pre-formatted "mime · size"
+    auto w = wrap_plain(raw, width - 1);
+    std::vector<std::string> lines;
+    for (auto& l : w) lines.push_back("  \xF0\x9F\x93\x8E \x1b[38;5;208m" + l + "\x1b[0m");
+    if (lines.empty()) lines.push_back("");
+    return lines;
+  }
+
   // system / header (1-column guard, see kind 1 above)
   auto w = wrap_plain(raw, width - 1);
   std::vector<std::string> lines;
@@ -474,13 +569,15 @@ void Ui::redraw() {
   // upward so the bottom rule + token line stay pinned to the bottom.
   std::vector<std::string> in_lines = wrap_input(input_, C - 3);  // C-3: 2 prefix + 1 guard
   int nlines = (int)in_lines.size();
+  std::string attach = attach_line();
+  int has_attach = attach.empty() ? 0 : 1;
   // Caret = end of the last row of the prefix (everything before the cursor).
   auto pre = wrap_input(input_.substr(0, cursor_), C - 3);
   int cur_line = (int)pre.size() - 1;
   int cur_col = render::display_width(pre.back());
   if (cur_line < 0) { cur_line = 0; cur_col = 0; }
 
-  int top_rule_row = R - 3 - nlines;
+  int top_rule_row = R - 3 - nlines - has_attach;
   if (top_rule_row < 1) top_rule_row = 1;
   int tr_h = top_rule_row - 1;  // transcript rows 0..tr_h-1; row tr_h is the blank gap
   if (tr_h < 0) tr_h = 0;
@@ -532,8 +629,16 @@ void Ui::redraw() {
       line += "\x1b[0m";
     } else if (i == R - 1) {
       line = tokens;
-    } else if (i > top_rule_row && i < R - 2) {
-      int li = i - top_rule_row - 1;  // which physical row this screen row holds
+    } else if (has_attach && i == top_rule_row + 1) {
+      // Attachment line (clipboard images), orange; trim to fit the width.
+      std::string a = attach;
+      while (render::display_width(a) > C - 2) {
+        size_t cut = rune_before(a, a.size());
+        a.erase(cut);
+      }
+      line = "\x1b[38;5;208m" + a + "\x1b[0m";
+    } else if (i > top_rule_row + has_attach && i < R - 2) {
+      int li = i - top_rule_row - 1 - has_attach;  // which input row this screen row holds
       if (li >= 0 && li < (int)in_lines.size())
         line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == cur_line, 0);
     }
@@ -542,7 +647,7 @@ void Ui::redraw() {
     frame += line;
     if (i != R - 1) frame += "\n";
   }
-  int hw_row = top_rule_row + 2 + cur_line;
+  int hw_row = top_rule_row + 2 + has_attach + cur_line;
   // 1-indexed: 2-char prefix + prefix width + 1. Clamp to C so the caret at the end
   // of a full-width row stays on the last column instead of wrapping off-screen.
   int cursor_col = 3 + cur_col;
@@ -724,19 +829,18 @@ void Ui::on_images(const std::vector<ImagePart>& images) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();
   Item it;
-  it.kind = 3;
-  it.raw = "[image] ";
+  it.kind = 6;
   for (size_t i = 0; i < images.size(); i++) {
-    std::string p = images[i].path.empty() ? images[i].mime : images[i].path;
-    if (i) it.raw += ", ";
-    it.raw += p + " (" + std::to_string(images[i].data.size()) + " bytes)";
+    if (i) it.raw += "  ";
+    it.raw += (images[i].mime.empty() ? "image" : images[i].mime) +
+              " \xc2\xb7 " + fmt_bytes(images[i].data.size());
   }
-  it.lines = render_item(3, it.raw, C);
+  it.lines = render_item(6, it.raw, C);
   items_.push_back(std::move(it));
   if (interactive_) {
     redraw();
   } else {
-    std::cout << (is_tty_out() ? "\x1b[2m" + it.raw + "\x1b[0m" : it.raw) << "\n";
+    std::cout << (is_tty_out() ? it.lines.front() : render::strip_ansi(it.lines.front())) << "\n";
     std::cout.flush();
   }
 }
@@ -855,10 +959,11 @@ std::string Ui::read_input() {
       cursor_ = 0;
       redraw();
       return s;
-    } else if (c == 0x03) {  // Ctrl-C: clear line, or exit if empty
-      if (!input_.empty()) {
+    } else if (c == 0x03) {  // Ctrl-C: clear line + attached images, or exit if empty
+      if (!input_.empty() || !pending_images_.empty()) {
         input_.clear();
         cursor_ = 0;
+        pending_images_.clear();
       } else {
         exit_requested_ = true;
         std::string s = input_;
@@ -876,6 +981,16 @@ std::string Ui::read_input() {
       }
       size_t to = rune_after(input_, cursor_);
       input_.erase(cursor_, to - cursor_);
+    } else if (c == 0x16) {  // Ctrl-V: paste clipboard (image -> attach, else text)
+      lk.unlock();
+      ClipData clip = read_clipboard();
+      lk.lock();
+      if (clip.is_image) {
+        attach_image(clip);
+      } else {
+        input_.insert(cursor_, clip.text);
+        cursor_ += clip.text.size();
+      }
     } else {
       apply_edit_key(c);  // shared editing core (identical to live-turn poll)
     }
@@ -1159,6 +1274,17 @@ Ui::PollResult Ui::handle_poll_byte(int c) {
   if (c == 0x03) {  // Ctrl-C: request a clean interrupt of the running turn
     util::request_interrupt();
     return PollResult::kCancel;
+  }
+  if (c == 0x16) {  // Ctrl-V: paste clipboard (image -> attach, else text)
+    ClipData clip = read_clipboard();
+    std::lock_guard<std::mutex> lk(draw_mu_);
+    if (clip.is_image) {
+      attach_image(clip);
+    } else {
+      input_.insert(cursor_, clip.text);
+      cursor_ += clip.text.size();
+    }
+    return PollResult::kRedraw;
   }
   std::lock_guard<std::mutex> lk(draw_mu_);
   bool changed = apply_edit_key(c);
