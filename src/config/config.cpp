@@ -41,7 +41,7 @@ Config Config::load(const std::string& config_path) {
 
   std::ifstream f(config_path);
   if (f.good()) {
-    nlohmann::json j;
+    dog::json j;
     try {
       f >> j;
     } catch (...) {

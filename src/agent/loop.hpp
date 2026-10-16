@@ -2,7 +2,7 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
+#include "json/json.hpp"
 #include "config/config.hpp"
 #include "llm/client.hpp"
 #include "tools/registry.hpp"
@@ -19,7 +19,7 @@ struct ImagePart {
 
 // Builds the OpenAI `content` array for a message: a (optional) text part plus
 // image parts. Returns a single string when there are no images (common case).
-nlohmann::json content_or_text(const std::string& text,
+dog::json content_or_text(const std::string& text,
                                const std::vector<ImagePart>& images);
 
 // Hooks the UI uses to render the agent as it runs.
@@ -65,7 +65,7 @@ public:
   std::string last_assistant_text() const;
 
 private:
-  nlohmann::json tools_for_model() const;
+  dog::json tools_for_model() const;
   std::string dispatch_tool(const ToolCall& tc);
   std::string do_exit_plan_mode(const ToolCall& tc);
   // The single leading system message (base prompt + plan-mode rules when active).
@@ -78,7 +78,7 @@ private:
   Config cfg_;
   ToolRegistry* reg_;
   std::string base_system_;
-  nlohmann::json messages_;  // OpenAI message array
+  dog::json messages_;  // OpenAI message array
   UiCallbacks ui_;
   bool plan_mode_;
   long last_prompt_tokens_ = 0;  // most recent round's prompt_tokens (context size sent)

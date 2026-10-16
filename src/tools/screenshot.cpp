@@ -14,7 +14,7 @@ namespace {
 // "[image:<mime>]<base64>" tag that read_file uses. grim writes the PNG to
 // stdout; we pipe it, base64-encode, and the agent loop inlines it as an
 // image_url part the model can see.
-std::string do_screenshot(const nlohmann::json&) {
+std::string do_screenshot(const dog::json&) {
   int out_pipe[2];
   if (::pipe(out_pipe) != 0) return "error: pipe() failed";
 
@@ -60,7 +60,7 @@ void register_screenshot_tool(ToolRegistry& r) {
         "Capture the current screen and return the image so you can see what "
         "something looks like.",
         {{"type", "object"},
-         {"properties", nlohmann::json::object()},
+         {"properties", dog::json::object()},
          {"additionalProperties", false}},
         /*read_only=*/true, do_screenshot);
 }

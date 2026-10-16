@@ -2,17 +2,17 @@
 
 namespace dog {
 
-void ToolRegistry::add(std::string name, std::string description, nlohmann::json params_schema,
+void ToolRegistry::add(std::string name, std::string description, dog::json params_schema,
                        bool read_only, Executor exec) {
   entries_.push_back({std::move(name), std::move(description), std::move(params_schema),
                        read_only, std::move(exec)});
 }
 
-nlohmann::json ToolRegistry::tools_array(bool read_only_only) const {
-  nlohmann::json arr = nlohmann::json::array();
+dog::json ToolRegistry::tools_array(bool read_only_only) const {
+  dog::json arr = dog::json::array();
   for (auto& e : entries_) {
     if (read_only_only && !e.read_only) continue;
-    nlohmann::json fn = {{"name", e.name},
+    dog::json fn = {{"name", e.name},
                          {"description", e.description},
                          {"parameters", e.params}};
     arr.push_back({{"type", "function"}, {"function", fn}});
@@ -20,7 +20,7 @@ nlohmann::json ToolRegistry::tools_array(bool read_only_only) const {
   return arr;
 }
 
-std::string ToolRegistry::dispatch(const std::string& name, const nlohmann::json& args) const {
+std::string ToolRegistry::dispatch(const std::string& name, const dog::json& args) const {
   for (auto& e : entries_) {
     if (e.name == name) return e.exec(args);
   }

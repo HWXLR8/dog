@@ -13,7 +13,6 @@ Requires:
 
 - `g++` (C++17)
 - `libcurl`
-- `nlohmann_json` (header-only)
 
 ## Usage
 

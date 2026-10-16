@@ -20,7 +20,7 @@ std::string read_whole(const std::string& path, std::string* err) {
 
 const size_t kMaxRead = 120000;
 
-std::string do_read_file(const nlohmann::json& args) {
+std::string do_read_file(const dog::json& args) {
   std::string path = args.value("path", "");
   if (path.empty()) return "error: path is required";
   std::string err;
@@ -57,7 +57,7 @@ std::string do_read_file(const nlohmann::json& args) {
   return result;
 }
 
-std::string do_write_file(const nlohmann::json& args) {
+std::string do_write_file(const dog::json& args) {
   std::string path = args.value("path", "");
   if (path.empty()) return "error: path is required";
   std::string content;
@@ -69,7 +69,7 @@ std::string do_write_file(const nlohmann::json& args) {
   return "OK: wrote " + std::to_string(content.size()) + " bytes to " + path;
 }
 
-std::string do_edit_file(const nlohmann::json& args) {
+std::string do_edit_file(const dog::json& args) {
   std::string path = args.value("path", "");
   std::string old_s = args.value("old_string", "");
   std::string new_s;

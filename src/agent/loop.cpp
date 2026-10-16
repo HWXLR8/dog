@@ -52,10 +52,10 @@ bool image_from_result(const std::string& result, ImagePart* out) {
 
 }  // namespace
 
-nlohmann::json content_or_text(const std::string& text,
+dog::json content_or_text(const std::string& text,
                                const std::vector<ImagePart>& images) {
-  if (images.empty()) return nlohmann::json(text);
-  nlohmann::json parts = nlohmann::json::array();
+  if (images.empty()) return dog::json(text);
+  dog::json parts = dog::json::array();
   if (!text.empty())
     parts.push_back({{"type", "text"}, {"text", text}});
   for (auto& im : images) {
@@ -74,10 +74,10 @@ const char* kPlanModeRules =
     "Form a concrete implementation plan. When ready, call exit_plan_mode with your "
     "plan in the \"plan\" argument. If the user rejects it, revise and call again.";
 
-nlohmann::json enter_plan_mode_schema() {
-  nlohmann::json params = {
+dog::json enter_plan_mode_schema() {
+  dog::json params = {
       {"type", "object"},
-      {"properties", nlohmann::json::object()},
+      {"properties", dog::json::object()},
       {"additionalProperties", false},
   };
   return {
@@ -93,8 +93,8 @@ nlohmann::json enter_plan_mode_schema() {
   };
 }
 
-nlohmann::json exit_plan_mode_schema() {
-  nlohmann::json params = {
+dog::json exit_plan_mode_schema() {
+  dog::json params = {
       {"type", "object"},
       {"properties",
        {{"plan", {{"type", "string"},
@@ -121,7 +121,7 @@ nlohmann::json exit_plan_mode_schema() {
 AgentLoop::AgentLoop(Config cfg, ToolRegistry* reg, std::string system_prompt,
                      bool start_in_plan, UiCallbacks callbacks)
     : cfg_(std::move(cfg)), reg_(reg), base_system_(std::move(system_prompt)),
-      messages_(nlohmann::json::array()), ui_(std::move(callbacks)),
+      messages_(dog::json::array()), ui_(std::move(callbacks)),
       plan_mode_(start_in_plan) {
   messages_.push_back({{"role", "system"}, {"content", current_system_message()}});
 }
@@ -140,7 +140,7 @@ namespace {
 // Start index of a "safe tail" of up to `keep_last` trailing messages that does not
 // split an assistant(tool_calls) message from the tool results that answer it. Index
 // 0 is the system message and is never part of the tail.
-int safe_tail_start(const nlohmann::json& msgs, int keep_last) {
+int safe_tail_start(const dog::json& msgs, int keep_last) {
   int n = (int)msgs.size();
   int idx = std::max(1, n - std::max(0, keep_last));
   while (idx > 1) {
@@ -169,7 +169,7 @@ void AgentLoop::maybe_compact() {
   if (ui_.status) ui_.status("\x1b[38;5;39mcompacting context\u2026\x1b[0m");
 
   // Summarize messages[1..tail) into a single note. Non-streaming single call.
-  nlohmann::json compact_msgs = nlohmann::json::array();
+  dog::json compact_msgs = dog::json::array();
   compact_msgs.push_back(
       {{"role", "system"},
        {"content",
@@ -178,11 +178,11 @@ void AgentLoop::maybe_compact() {
         "constraints the user stated, and pending/next steps. Drop: tool-call mechanics, "
         "intermediate reasoning, and verbose tool output."}});
   for (size_t i = 1; i < (size_t)tail; i++) {
-    nlohmann::json m = messages_[i];
+    dog::json m = messages_[i];
     // Slim: replace any image parts with a text placeholder so the summary
     // side-call doesn't carry megabytes of base64 (it can't "see" them anyway).
     if (m.contains("content") && m["content"].is_array()) {
-      nlohmann::json parts = nlohmann::json::array();
+      dog::json parts = dog::json::array();
       for (auto& p : m["content"]) {
         if (p.contains("type") && p.value("type", "") == "image_url")
           parts.push_back({{"type", "text"}, {"text", "[image omitted]"}});
@@ -198,7 +198,7 @@ void AgentLoop::maybe_compact() {
   ChatResult res;
   std::string err;
   auto noop = [](const std::string&) {};
-  bool ok = chat(llm, compact_msgs, nlohmann::json::array(), noop, noop, &res, &err);
+  bool ok = chat(llm, compact_msgs, dog::json::array(), noop, noop, &res, &err);
 
   if (ui_.status) ui_.status("");  // clear the transient "compacting" line
   if (!ok || util::trim(res.content).empty()) {
@@ -206,7 +206,7 @@ void AgentLoop::maybe_compact() {
     return;  // fail open: keep the full history; the threshold re-triggers next round
   }
 
-  nlohmann::json new_msgs = nlohmann::json::array();
+  dog::json new_msgs = dog::json::array();
   new_msgs.push_back(messages_[0]);  // system prompt, untouched
   // Fold the older history into a user message (not a second `system`): some chat
   // templates (e.g. the one vLLM uses here) require the first non-system message to
@@ -222,8 +222,8 @@ void AgentLoop::maybe_compact() {
   last_prompt_tokens_ = 0;
 }
 
-nlohmann::json AgentLoop::tools_for_model() const {
-  nlohmann::json arr = reg_->tools_array(plan_mode_);
+dog::json AgentLoop::tools_for_model() const {
+  dog::json arr = reg_->tools_array(plan_mode_);
   if (plan_mode_)
     arr.push_back(exit_plan_mode_schema());
   else
@@ -246,11 +246,11 @@ void AgentLoop::exit_plan_mode() {
 }
 
 std::string AgentLoop::do_exit_plan_mode(const ToolCall& tc) {
-  nlohmann::json args;
+  dog::json args;
   try {
-    args = nlohmann::json::parse(tc.args_json);
+    args = dog::json::parse(tc.args_json);
   } catch (...) {
-    args = nlohmann::json::object();
+    args = dog::json::object();
   }
   std::string plan = args.value("plan", "");
   if (util::trim(plan).empty())
@@ -273,17 +273,17 @@ std::string AgentLoop::dispatch_tool(const ToolCall& tc) {
   if (!reg_->known(tc.name)) return "error: unknown tool: " + tc.name;
   if (plan_mode_ && !reg_->is_read_only(tc.name))
     return "error: tool '" + tc.name + "' is blocked in plan mode (read-only only)";
-  nlohmann::json args;
+  dog::json args;
   try {
-    args = nlohmann::json::parse(tc.args_json);
+    args = dog::json::parse(tc.args_json);
   } catch (...) {
-    args = nlohmann::json::object();
+    args = dog::json::object();
   }
   return reg_->dispatch(tc.name, args);
 }
 
 void AgentLoop::clear_context() {
-  messages_ = nlohmann::json::array();
+  messages_ = dog::json::array();
   messages_.push_back({{"role", "system"}, {"content", current_system_message()}});
 }
 
@@ -315,7 +315,7 @@ bool AgentLoop::run_turn(const std::string& user_input,
       if (ui_.system) ui_.system("(interrupted)");
       return false;
     }
-    nlohmann::json tools = tools_for_model();
+    dog::json tools = tools_for_model();
     ChatResult res;
     std::string err;
     if (ui_.model_start) ui_.model_start();
@@ -347,16 +347,16 @@ bool AgentLoop::run_turn(const std::string& user_input,
     if (ui_.usage && res.usage.present)
       ui_.usage(res.usage.prompt_tokens, res.usage.completion_tokens, res.usage.total_tokens);
 
-    nlohmann::json assistant;
+    dog::json assistant;
     assistant["role"] = "assistant";
     if (res.content.empty())
       assistant["content"] = nullptr;
     else
       assistant["content"] = res.content;
     if (!res.tool_calls.empty()) {
-      nlohmann::json tcs = nlohmann::json::array();
+      dog::json tcs = dog::json::array();
       for (auto& tc : res.tool_calls) {
-        nlohmann::json f = {{"name", tc.name}, {"arguments", tc.args_json}};
+        dog::json f = {{"name", tc.name}, {"arguments", tc.args_json}};
         tcs.push_back({{"id", tc.id}, {"type", "function"}, {"function", f}});
       }
       assistant["tool_calls"] = tcs;

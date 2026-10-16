@@ -14,7 +14,7 @@ bool is_http_url(const std::string& u) {
   return u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0;
 }
 
-std::string do_web_fetch(const nlohmann::json& args) {
+std::string do_web_fetch(const dog::json& args) {
   std::string url = args.value("url", "");
   if (url.empty()) return "error: url is required";
   if (!is_http_url(url)) return "error: url must start with http:// or https://";

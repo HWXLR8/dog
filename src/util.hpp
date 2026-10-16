@@ -97,8 +97,8 @@ inline bool is_valid_utf8(const std::string& s) {
 }
 
 // Guard before a tool result or user input is pushed into the message history.
-// nlohmann throws type_error.316 on dump() if any stored string is invalid UTF-8,
-// which crashes the whole harness when a tool returns binary (images, etc.).
+// A strict JSON serializer throws on invalid UTF-8, which would crash the whole
+// harness when a tool returns binary (images, etc.).
 // Binary content is replaced by a short valid-ASCII placeholder instead.
 inline std::string sanitize_binary(const std::string& s) {
   if (is_valid_utf8(s)) return s;

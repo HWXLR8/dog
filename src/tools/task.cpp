@@ -17,7 +17,7 @@ const char* kSubagentSystem =
     "answer as plain text.";
 
 std::string do_task(const Config& cfg, const std::string& skills_dir,
-                    const nlohmann::json& args,
+                    const dog::json& args,
                     std::function<void(const std::string&)> log) {
   std::string description = args.value("description", "");
   std::string prompt = args.value("prompt", "");
@@ -62,7 +62,7 @@ void register_task_tool(ToolRegistry& r, const Config& cfg, const std::string& s
          {"required", {"prompt"}},
          {"additionalProperties", false}},
         /*read_only=*/false,
-        [cfg, skills_dir, log](const nlohmann::json& args) {
+        [cfg, skills_dir, log](const dog::json& args) {
           return do_task(cfg, skills_dir, args, log);
         });
 }

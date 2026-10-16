@@ -17,7 +17,7 @@ namespace {
 
 const size_t kMaxOutput = 20000;
 
-std::string do_shell(const nlohmann::json& args) {
+std::string do_shell(const dog::json& args) {
   std::string command = args.value("command", "");
   if (command.empty()) return "error: command is required";
   std::string cwd;

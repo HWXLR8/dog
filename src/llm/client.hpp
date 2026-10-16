@@ -2,7 +2,7 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
+#include "json/json.hpp"
 
 namespace dog {
 
@@ -38,8 +38,8 @@ struct LlmConfig {
 // captured into out->usage if the endpoint returns it. Returns false on
 // transport/HTTP error (err set).
 bool chat(const LlmConfig& cfg,
-          const nlohmann::json& messages,
-          const nlohmann::json& tools,
+          const dog::json& messages,
+          const dog::json& tools,
           std::function<void(const std::string&)> on_text_chunk,
           std::function<void(const std::string&)> on_reasoning_chunk,
           ChatResult* out,

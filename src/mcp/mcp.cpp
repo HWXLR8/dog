@@ -17,51 +17,51 @@ McpClient::~McpClient() { transport_cleanup(); }
 
 bool McpClient::connect(std::string* err) {
   if (!transport_init(err)) return false;
-  nlohmann::json params = {
+  dog::json params = {
       {"protocolVersion", "2024-11-05"},
-      {"capabilities", nlohmann::json::object()},
+      {"capabilities", dog::json::object()},
       {"clientInfo", {{"name", "dog"}, {"version", "0.1"}}},
   };
-  nlohmann::json resp = request("initialize", params, err);
+  dog::json resp = request("initialize", params, err);
   if (resp.empty()) return false;
   if (resp.contains("error")) {
     if (err) *err = "initialize failed: " + resp["error"].value("message", "unknown");
     return false;
   }
-  notify("notifications/initialized", nlohmann::json::object(), err);
+  notify("notifications/initialized", dog::json::object(), err);
   return true;
 }
 
-nlohmann::json McpClient::request(const std::string& method, const nlohmann::json& params,
+dog::json McpClient::request(const std::string& method, const dog::json& params,
                                   std::string* err) {
-  nlohmann::json msg = {{"jsonrpc", "2.0"}, {"id", next_id_++}, {"method", method}};
+  dog::json msg = {{"jsonrpc", "2.0"}, {"id", next_id_++}, {"method", method}};
   if (!params.is_null()) msg["params"] = params;
   return send(msg, err);
 }
 
-void McpClient::notify(const std::string& method, const nlohmann::json& params,
+void McpClient::notify(const std::string& method, const dog::json& params,
                        std::string* err) {
-  nlohmann::json msg = {{"jsonrpc", "2.0"}, {"method", method}};
+  dog::json msg = {{"jsonrpc", "2.0"}, {"method", method}};
   if (!params.is_null() && !params.empty()) msg["params"] = params;
   send(msg, err);
 }
 
 std::vector<McpTool> McpClient::list_tools(std::string* err) {
   std::vector<McpTool> tools;
-  nlohmann::json resp = request("tools/list", nlohmann::json::object(), err);
+  dog::json resp = request("tools/list", dog::json::object(), err);
   if (resp.empty()) return tools;
   if (resp.contains("error")) {
     if (err) *err = resp["error"].value("message", "unknown");
     return tools;
   }
-  nlohmann::json result = resp.value("result", nlohmann::json::object());
+  dog::json result = resp.value("result", dog::json::object());
   if (!result.is_object()) return tools;
-  nlohmann::json arr = result.value("tools", nlohmann::json::array());
+  dog::json arr = result.value("tools", dog::json::array());
   for (auto& t : arr) {
     McpTool mt;
     mt.name = t.value("name", "");
     mt.description = t.value("description", "");
-    mt.input_schema = t.value("inputSchema", nlohmann::json::object());
+    mt.input_schema = t.value("inputSchema", dog::json::object());
     if (t.contains("annotations") && t["annotations"].contains("readOnlyHint") &&
         t["annotations"]["readOnlyHint"].is_boolean())
       mt.read_only = t["annotations"]["readOnlyHint"].get<bool>();
@@ -70,24 +70,24 @@ std::vector<McpTool> McpClient::list_tools(std::string* err) {
   return tools;
 }
 
-std::string McpClient::call_tool(const std::string& name, const nlohmann::json& args,
+std::string McpClient::call_tool(const std::string& name, const dog::json& args,
                                  bool* is_error, std::string* err) {
   if (is_error) *is_error = false;
-  nlohmann::json params = {
+  dog::json params = {
       {"name", name},
-      {"arguments", (args.is_null() ? nlohmann::json::object() : args)},
+      {"arguments", (args.is_null() ? dog::json::object() : args)},
   };
-  nlohmann::json resp = request("tools/call", params, err);
+  dog::json resp = request("tools/call", params, err);
   if (resp.empty()) {
     std::string e = err ? *err : "";
     return e.empty() ? "error: no response from MCP server" : ("error: " + e);
   }
   if (resp.contains("error")) return "error: " + resp["error"].value("message", "unknown");
-  nlohmann::json result = resp.value("result", nlohmann::json::object());
+  dog::json result = resp.value("result", dog::json::object());
   bool is_err = false;
   if (result.is_object() && result.contains("isError")) is_err = result["isError"].get<bool>();
   std::string out;
-  nlohmann::json content = result.value("content", nlohmann::json::array());
+  dog::json content = result.value("content", dog::json::array());
   if (content.is_array())
     for (auto& c : content)
       if (c.value("type", "") == "text") {
@@ -214,12 +214,12 @@ bool McpStdioClient::read_line(std::string& line, long timeout_ms) {
   }
 }
 
-nlohmann::json McpStdioClient::send(const nlohmann::json& msg, std::string* err) {
+dog::json McpStdioClient::send(const dog::json& msg, std::string* err) {
   if (!write_line(msg.dump())) {
     if (err) *err = "write to MCP stdin failed";
     return {};
   }
-  if (!msg.contains("id")) return nlohmann::json();  // notification: no reply
+  if (!msg.contains("id")) return dog::json();  // notification: no reply
   int want = msg["id"].get<int>();
   for (int i = 0; i < 10000; ++i) {
     std::string rl;
@@ -228,9 +228,9 @@ nlohmann::json McpStdioClient::send(const nlohmann::json& msg, std::string* err)
       return {};
     }
     if (rl.empty()) continue;
-    nlohmann::json m;
+    dog::json m;
     try {
-      m = nlohmann::json::parse(rl);
+      m = dog::json::parse(rl);
     } catch (...) {
       continue;  // stray/log line, not JSON
     }
@@ -244,8 +244,8 @@ nlohmann::json McpStdioClient::send(const nlohmann::json& msg, std::string* err)
 
 namespace {
 
-std::vector<nlohmann::json> parse_mcp_body(const std::string& body) {
-  std::vector<nlohmann::json> out;
+std::vector<dog::json> parse_mcp_body(const std::string& body) {
+  std::vector<dog::json> out;
   bool sse = false;
   for (auto& raw : util::split_lines(body)) {
     std::string t = util::trim(raw);
@@ -253,7 +253,7 @@ std::vector<nlohmann::json> parse_mcp_body(const std::string& body) {
       std::string payload = util::trim(t.substr(5));
       if (payload.empty() || payload == "[DONE]") continue;
       try {
-        out.push_back(nlohmann::json::parse(payload));
+        out.push_back(dog::json::parse(payload));
       } catch (...) {
       }
       sse = true;
@@ -261,7 +261,7 @@ std::vector<nlohmann::json> parse_mcp_body(const std::string& body) {
   }
   if (sse) return out;
   try {
-    nlohmann::json j = nlohmann::json::parse(body);
+    dog::json j = dog::json::parse(body);
     if (j.is_array())
       for (auto& x : j) out.push_back(x);
     else if (!j.is_null()) out.push_back(j);
@@ -285,7 +285,7 @@ std::string sanitize_server_name(const std::string& s) {
 
 bool McpHttpClient::transport_init(std::string* /*err*/) { return true; }
 
-nlohmann::json McpHttpClient::send(const nlohmann::json& msg, std::string* err) {
+dog::json McpHttpClient::send(const dog::json& msg, std::string* err) {
   std::map<std::string, std::string> hdr = {
       {"Content-Type", "application/json"},
       {"Accept", "application/json, text/event-stream"},
@@ -306,12 +306,12 @@ nlohmann::json McpHttpClient::send(const nlohmann::json& msg, std::string* err) 
     if (low.rfind("mcp-session-id:", 0) == 0)
       session_id_ = util::trim(h.substr(std::string("mcp-session-id:").size()));
   }
-  if (status == 202) return nlohmann::json();  // accepted, no body (notification)
+  if (status == 202) return dog::json();  // accepted, no body (notification)
   if (status != 200) {
     if (err) *err = "HTTP " + std::to_string(status) + " from MCP server";
     return {};
   }
-  std::vector<nlohmann::json> objs = parse_mcp_body(body);
+  std::vector<dog::json> objs = parse_mcp_body(body);
   if (msg.contains("id"))
     for (auto& o : objs)
       if (o.contains("id") && o["id"] == msg["id"]) return o;
@@ -346,15 +346,15 @@ void McpRegistry::start(const std::vector<McpServerConfig>& servers, ToolRegistr
     std::string prefix = "mcp__" + sanitize_server_name(scfg.name) + "__";
     McpClient* raw = client.get();
     for (const auto& t : tools) {
-      nlohmann::json schema = t.input_schema;
-      if (!schema.is_object()) schema = nlohmann::json::object();
+      dog::json schema = t.input_schema;
+      if (!schema.is_object()) schema = dog::json::object();
       if (!schema.contains("type")) schema["type"] = "object";
-      if (!schema.contains("properties")) schema["properties"] = nlohmann::json::object();
+      if (!schema.contains("properties")) schema["properties"] = dog::json::object();
       std::string full = prefix + t.name;
       std::string desc = t.description.empty() ? ("MCP tool " + full) : t.description;
       bool ro = t.read_only;
       std::string server_tool = t.name;
-      reg.add(full, desc, schema, ro, [raw, server_tool](const nlohmann::json& args) {
+      reg.add(full, desc, schema, ro, [raw, server_tool](const dog::json& args) {
         bool is_err = false;
         std::string e;
         return raw->call_tool(server_tool, args, &is_err, &e);

@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
+#include "json/json.hpp"
 #include "config/config.hpp"
 #include "tools/registry.hpp"
 
@@ -13,7 +13,7 @@ namespace dog {
 struct McpTool {
   std::string name;
   std::string description;
-  nlohmann::json input_schema;
+  dog::json input_schema;
   bool read_only = false;  // from annotations.readOnlyHint
 };
 
@@ -28,19 +28,19 @@ public:
   bool connect(std::string* err);
   std::vector<McpTool> list_tools(std::string* err);
   // Returns the tool's text output; sets *is_error from result.isError.
-  std::string call_tool(const std::string& name, const nlohmann::json& args,
+  std::string call_tool(const std::string& name, const dog::json& args,
                         bool* is_error, std::string* err);
 
 protected:
   // Send a request (has id), return the matching response (empty on transport
   // failure, which also sets *err). Protocol-level errors are in resp["error"].
-  nlohmann::json request(const std::string& method, const nlohmann::json& params,
+  dog::json request(const std::string& method, const dog::json& params,
                          std::string* err);
-  void notify(const std::string& method, const nlohmann::json& params, std::string* err);
+  void notify(const std::string& method, const dog::json& params, std::string* err);
 
   // Transport round-trip. If msg has an "id", block until the matching response
   // and return it; otherwise send and return an empty json.
-  virtual nlohmann::json send(const nlohmann::json& msg, std::string* err) = 0;
+  virtual dog::json send(const dog::json& msg, std::string* err) = 0;
   virtual bool transport_init(std::string* err) = 0;
   virtual void transport_cleanup() {}
 
@@ -55,7 +55,7 @@ public:
   explicit McpStdioClient(McpServerConfig cfg) : McpClient(std::move(cfg)) {}
 
 private:
-  nlohmann::json send(const nlohmann::json& msg, std::string* err) override;
+  dog::json send(const dog::json& msg, std::string* err) override;
   bool transport_init(std::string* err) override;
   void transport_cleanup() override;
 
@@ -76,7 +76,7 @@ public:
   explicit McpHttpClient(McpServerConfig cfg) : McpClient(std::move(cfg)) {}
 
 private:
-  nlohmann::json send(const nlohmann::json& msg, std::string* err) override;
+  dog::json send(const dog::json& msg, std::string* err) override;
   bool transport_init(std::string* err) override;
 
   std::string session_id_;

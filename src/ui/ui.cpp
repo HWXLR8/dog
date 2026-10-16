@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include "json/json.hpp"
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <unistd.h>
@@ -415,7 +415,7 @@ std::vector<std::string> Ui::render_item(int kind, const std::string& raw, int w
     if (t2 != std::string::npos) args_json = args_json.substr(0, t2);
     std::vector<std::string> lines;
     try {
-      auto j = nlohmann::json::parse(args_json);
+      auto j = dog::json::parse(args_json);
       std::string path = j.value("path", j.value("file_path", "?"));
       lines.push_back("\x1b[1m\x1b[38;5;208m" + path + "\x1b[0m");
       const char kGreen = 2;  // 38;5;46

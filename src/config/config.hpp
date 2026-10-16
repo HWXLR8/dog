@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
+#include "json/json.hpp"
 
 namespace dog {
 

@@ -16,9 +16,9 @@ struct SseAcc {
 
 void process_data_line(const std::string& payload, SseAcc* a) {
   if (payload == "[DONE]") return;
-  nlohmann::json j;
+  dog::json j;
   try {
-    j = nlohmann::json::parse(payload);
+    j = dog::json::parse(payload);
   } catch (...) {
     return;
   }
@@ -79,13 +79,13 @@ void process_data_line(const std::string& payload, SseAcc* a) {
 }  // namespace
 
 bool chat(const LlmConfig& cfg,
-          const nlohmann::json& messages,
-          const nlohmann::json& tools,
+          const dog::json& messages,
+          const dog::json& tools,
           std::function<void(const std::string&)> on_text_chunk,
           std::function<void(const std::string&)> on_reasoning_chunk,
           ChatResult* out,
           std::string* err) {
-  nlohmann::json req = {{"model", cfg.model},
+  dog::json req = {{"model", cfg.model},
                         {"messages", messages},
                         {"stream", true},
                         {"stream_options", {{"include_usage", true}}}};
