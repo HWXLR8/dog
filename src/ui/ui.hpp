@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,6 +40,26 @@ public:
   void on_status(const std::string& msg);  // set (or clear) the transient status line
   void on_images(const std::vector<ImagePart>& images);  // images the model will now see
   bool confirm(const std::string& plan);
+  // A multiple-choice question the agent asks the user, answered by a picker that
+  // takes the input box's place. `opts` are the suggested answers; the user may
+  // also type their own. Returns the chosen label (or the typed text). When more
+  // than one question is passed, all are answered in one card (tabs + Submit).
+  struct Question {
+    std::string header;  // short tab label ("Scope"); "" = "Q1", "Q2", ...
+    std::string question;
+    struct Choice {
+      std::string label;
+      std::string desc;  // shown under the label
+    };
+    std::vector<Choice> opts;
+    bool multi = false;  // allow several answers
+  };
+  // Blocking: waits (on ask_cv_) until the user answers or the turn is
+  // interrupted. `qs` are the questions; returns one answer each, or an empty
+  // vector if interrupted. Non-interactive runs return an empty vector.
+  std::vector<std::string> ask(const std::vector<Question>& qs);
+  // Record an answered question in the transcript as "· question → answer".
+  void answered(const std::string& question, const std::string& answer);
 
   // --- Interactive-only. ---
   void user_message(const std::string& text);  // record a submitted user line
@@ -75,6 +96,18 @@ private:
   void one_shot_thinking_clear();
   void consume_paste(std::string pre);  // drain a bracketed paste into input_ literally
   void spinner_loop();  // timer-driven redraws so the status line animates
+  // Picker / ask_user.
+  void pick_lines(std::vector<std::string>& out, int C);  // also sets pick_caret_line_/col_
+  bool picker_key(int c);        // picker keys (Enter, digits, Space, Ctrl-C); true = consumed
+  bool ask_key(int c);           // keys while a question is open; true = consumed
+  void ask_show(size_t idx);     // save the current tab's state, show tab idx
+  void ask_confirm();            // Enter on a question: record the answer, advance
+  void pick_finish(int r);       // record the result and wake ask()
+  void hint(const std::string& msg);
+  size_t pick_rows() const;      // selectable rows under the cursor
+  bool on_own_row() const;
+  bool on_submit_row() const;
+  bool submit_tab() const;
   ClipData read_clipboard();          // shell out to wl-paste; image or text
   void attach_image(const ClipData&); // record an attached image (re-render)
   std::string attach_line() const;    // one-liner for attached images ("" if none)
@@ -123,6 +156,32 @@ private:
   std::vector<std::string> history_;
   int hist_idx_ = -1;  // -1 = free editing; else index into history_
   std::string suspended_input_;  // buffer before navigation began (restored on Down past newest)
+
+  // Picker / ask_user state. While `picker_active_` the picker takes the input
+  // box's place and draws its own caret; `pick_*` hold the question on screen and
+  // `ask_*` hold the per-question state when several questions are shown as tabs.
+  struct AskState {
+    size_t sel = 0;
+    std::vector<bool> marked;
+    std::string typed;   // the "own answer" row's text while another tab is shown
+    std::string answer;  // "" = not answered yet
+  };
+  bool picker_active_ = false;
+  bool asking_ = false;
+  std::vector<Question> ask_qs_;
+  std::vector<AskState> ask_st_;
+  size_t ask_idx_ = 0;  // == ask_qs_.size(): the Submit tab (several questions)
+  std::string pick_title_;
+  std::vector<Question::Choice> pick_opts_;
+  bool pick_multi_ = false;
+  size_t pick_sel_ = 0;
+  std::vector<bool> pick_marked_;
+  int pick_result_ = -2;  // -2 = pending, -1 = cancel, >= 0 = done
+  std::string hint_;
+  std::chrono::steady_clock::time_point hint_until_;
+  std::condition_variable ask_cv_;
+  int pick_caret_line_ = -1;  // line index (within picker lines) of the typed row; -1 = none
+  int pick_caret_col_ = 0;    // display column of the typed caret
 
   // Scroll. 0 = at bottom (auto-follow). Positive = scrolled up N lines.
   int scroll_offset_ = 0;

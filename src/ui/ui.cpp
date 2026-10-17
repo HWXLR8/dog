@@ -488,6 +488,27 @@ std::vector<std::string> Ui::render_item(int kind, const std::string& raw, int w
     return lines;
   }
 
+  if (kind == 7) {  // answered question: "· question → answer"
+    size_t tab = raw.find('\t');
+    std::string q = raw.substr(0, tab);
+    std::string a = tab == std::string::npos ? "" : raw.substr(tab + 1);
+    if (a.empty()) a = "(no answer)";
+    const std::string dot = "  \x1b[2m\xc2\xb7\x1b[0m ";
+    const std::string arrow = "\x1b[2m\xe2\x86\x92\x1b[0m ";
+    const std::string blue = "\x1b[38;5;153m";
+    std::vector<std::string> lines;
+    if (render::display_width(q) + render::display_width(a) + 7 <= width) {
+      lines.push_back(dot + q + " " + arrow + blue + a + "\x1b[0m");
+      return lines;
+    }
+    auto qw = wrap_plain(q, width - 4);
+    for (size_t i = 0; i < qw.size(); i++) lines.push_back((i ? "    " : dot) + qw[i]);
+    auto aw = wrap_plain(a, width - 6);
+    for (size_t i = 0; i < aw.size(); i++)
+      lines.push_back((i ? "      " : "    " + arrow) + blue + aw[i] + "\x1b[0m");
+    return lines;
+  }
+
   // system / header (1-column guard, see kind 1 above)
   auto w = wrap_plain(raw, width - 1);
   std::vector<std::string> lines;
@@ -501,7 +522,9 @@ std::vector<std::string> Ui::content_lines() const {
   std::vector<std::string> out;
   for (size_t i = 0; i < items_.size(); i++) {
     for (auto& l : items_[i].lines) out.push_back(l);
-    if (i + 1 < items_.size() || reasoning_active_ || !live_.empty()) out.push_back("");
+    // Answered questions (kind 7) group together: one block, no blank between them.
+    bool group = i + 1 < items_.size() && items_[i].kind == 7 && items_[i + 1].kind == 7;
+    if (!group && (i + 1 < items_.size() || reasoning_active_ || !live_.empty())) out.push_back("");
   }
   if (reasoning_active_ && !reasoning_.empty()) {
     for (auto& l : render_item(4, reasoning_, C)) out.push_back(l);
@@ -567,20 +590,36 @@ void Ui::redraw() {
   // The input box expands to fit the number of physical rows input_ wraps to
   // (multi-line via Shift+Enter / paste, plus long lines that wrap). It grows
   // upward so the bottom rule + token line stay pinned to the bottom.
-  std::vector<std::string> in_lines = wrap_input(input_, C - 3);  // C-3: 2 prefix + 1 guard
+  //
+  // When the picker is active it takes the input box's place:
+  // no box, no rules, and it draws its own caret, pinned to the bottom rows above
+  // the token line. The input box and the attach line are then hidden.
+  const bool box = !picker_active_;
+  std::vector<std::string> plines;  // picker lines (empty when not active)
+  if (!box) pick_lines(plines, C);
+  std::vector<std::string> in_lines = box ? wrap_input(input_, C - 3) : std::vector<std::string>{};
   int nlines = (int)in_lines.size();
-  std::string attach = attach_line();
-  int has_attach = attach.empty() ? 0 : 1;
+  std::string attach = box ? attach_line() : "";
+  int has_attach = box && !attach.empty() ? 1 : 0;
   // Caret = end of the last row of the prefix (everything before the cursor).
   auto pre = wrap_input(input_.substr(0, cursor_), C - 3);
   int cur_line = (int)pre.size() - 1;
   int cur_col = render::display_width(pre.back());
   if (cur_line < 0) { cur_line = 0; cur_col = 0; }
 
-  int top_rule_row = R - 3 - nlines - has_attach;
-  if (top_rule_row < 1) top_rule_row = 1;
-  int tr_h = top_rule_row - 1;  // transcript rows 0..tr_h-1; row tr_h is the blank gap
-  if (tr_h < 0) tr_h = 0;
+  int top_rule_row;  // meaningful only in box mode
+  int tr_h;  // transcript rows 0..tr_h-1; row tr_h is the blank gap (box) / picker start
+  if (box) {
+    top_rule_row = R - 3 - nlines - has_attach;
+    if (top_rule_row < 1) top_rule_row = 1;
+    tr_h = top_rule_row - 1;
+    if (tr_h < 0) tr_h = 0;
+  } else {
+    top_rule_row = 0;
+    int P = (int)plines.size();
+    tr_h = R - 1 - P;  // picker occupies rows [tr_h, R-1); token line is row R-1
+    if (tr_h < 0) tr_h = 0;
+  }
 
   // Index of the transcript line drawn at row 0. It is negative when the
   // transcript is shorter than the area, which means blank top padding so the
@@ -620,43 +659,70 @@ void Ui::redraw() {
       if (idx >= 0 && idx < (long)tr.size())
         line = tr[idx];
       // else blank: top padding while the transcript is shorter than the area
-    } else if (i == top_rule_row || i == R - 2) {
-      // Full-width horizontal rules around the input box (above and below it), dimmed.
-      line.clear();
-      line.reserve((size_t)C * 3 + 8);
-      line += "\x1b[2m";
-      for (int c = 0; c < C; c++) line += "\xe2\x94\x80";
-      line += "\x1b[0m";
-    } else if (i == R - 1) {
-      line = tokens;
-    } else if (has_attach && i == top_rule_row + 1) {
-      // Attachment line (clipboard images), orange; trim to fit the width.
-      std::string a = attach;
-      while (render::display_width(a) > C - 2) {
-        size_t cut = rune_before(a, a.size());
-        a.erase(cut);
+    } else if (!box && i >= tr_h && i < R - 1) {
+      // Picker line: the picker is pinned to the bottom, above the token line.
+      int pi = i - tr_h;
+      if (pi >= 0 && pi < (int)plines.size())
+        line = plines[pi];
+    } else if (box) {
+      if (i == top_rule_row || i == R - 2) {
+        // Full-width horizontal rules around the input box (above and below it), dimmed.
+        line.clear();
+        line.reserve((size_t)C * 3 + 8);
+        line += "\x1b[2m";
+        for (int c = 0; c < C; c++) line += "\xe2\x94\x80";
+        line += "\x1b[0m";
+      } else if (i == R - 1) {
+        line = tokens;
+      } else if (has_attach && i == top_rule_row + 1) {
+        // Attachment line (clipboard images), orange; trim to fit the width.
+        std::string a = attach;
+        while (render::display_width(a) > C - 2) {
+          size_t cut = rune_before(a, a.size());
+          a.erase(cut);
+        }
+        line = "\x1b[38;5;208m" + a + "\x1b[0m";
+      } else if (i > top_rule_row + has_attach && i < R - 2) {
+        int li = i - top_rule_row - 1 - has_attach;  // which input row this screen row holds
+        if (li >= 0 && li < (int)in_lines.size())
+          line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == cur_line, 0);
       }
-      line = "\x1b[38;5;208m" + a + "\x1b[0m";
-    } else if (i > top_rule_row + has_attach && i < R - 2) {
-      int li = i - top_rule_row - 1 - has_attach;  // which input row this screen row holds
-      if (li >= 0 && li < (int)in_lines.size())
-        line = render_input_line(in_lines[li], li == 0 ? "> " : "  ", li == cur_line, 0);
+      // i == tr_h (the gap) and any overflow input rows are left blank.
     }
-    // i == tr_h (the gap) and any overflow input rows are left blank.
+    // In picker mode, row R-1 is the token line and any overflow picker rows blank.
+    if (!box && i == R - 1) line = tokens;
     frame += "\x1b[2K";  // clear whole row so a shorter line leaves no old tail
     frame += line;
     if (i != R - 1) frame += "\n";
   }
-  int hw_row = top_rule_row + 2 + has_attach + cur_line;
-  // 1-indexed: 2-char prefix + prefix width + 1. Clamp to C so the caret at the end
-  // of a full-width row stays on the last column instead of wrapping off-screen.
-  int cursor_col = 3 + cur_col;
+
+  // Caret placement. In box mode it is the real terminal cursor at the end of the
+  // input row. In picker mode the picker draws its own caret (the "own answer"
+  // Caret placement. In box mode the real terminal cursor sits in the input row.
+  // In picker mode the "own answer" row is the only editable line: when it is the
+  // active row the real terminal cursor sits in the typed text; otherwise it is
+  // hidden (the "❯" glyph is the selector) so it never jumps between rows.
+  int hw_row, cursor_col;
+  bool caret_shown;
+  if (box) {
+    hw_row = top_rule_row + 2 + has_attach + cur_line;
+    // 1-indexed: 2-char prefix + prefix width + 1. Clamp to C so the caret at the
+    // end of a full-width row stays on the last column instead of wrapping off-screen.
+    cursor_col = 3 + cur_col;
+    caret_shown = true;
+  } else {
+    bool in_own_row = pick_caret_line_ >= 0;
+    hw_row = tr_h + 1 + (in_own_row ? pick_caret_line_ : 0);  // +1 for 1-indexed CUP
+    cursor_col = in_own_row ? pick_caret_col_ + 1 : 1;  // 1-indexed
+    caret_shown = in_own_row;  // hide it otherwise: the "❯" is the selector
+  }
   if (hw_row < 1) hw_row = 1;
   if (hw_row > R - 1) hw_row = R - 1;
   if (cursor_col > C) cursor_col = C;
   frame += "\x1b[" + std::to_string(hw_row) + ";" + std::to_string(cursor_col) + "H";
+  frame += caret_shown ? "\x1b[?25h" : "\x1b[?25l";  // show only in the editable row
 
-  if (frame == last_frame_ && R == last_rows_) {
+  if (frame == last_frame_ && R == last_rows_ && C == last_cols_) {
     std::cout.flush();
     return;
   }
@@ -893,6 +959,317 @@ bool Ui::confirm(const std::string& plan) {
   items_.push_back(std::move(d));
   redraw();
   return ok;
+}
+
+// --- Picker / ask_user ---
+
+void Ui::hint(const std::string& msg) {
+  hint_ = msg;
+  hint_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1600);
+}
+
+bool Ui::submit_tab() const {
+  return asking_ && ask_qs_.size() > 1 && ask_idx_ == ask_qs_.size();
+}
+bool Ui::on_own_row() const {
+  return asking_ && !submit_tab() && pick_sel_ == pick_opts_.size();
+}
+bool Ui::on_submit_row() const {
+  return asking_ && pick_multi_ && !submit_tab() && pick_sel_ == pick_opts_.size() + 1;
+}
+size_t Ui::pick_rows() const {
+  if (submit_tab()) return 2;  // "Submit answers" / "Cancel"
+  if (!asking_) return pick_opts_.size();
+  return pick_opts_.size() + (pick_multi_ ? 2 : 1);  // options + "own" (+ "Submit")
+}
+
+void Ui::pick_finish(int r) {
+  pick_result_ = r;
+  picker_active_ = false;
+  asking_ = false;
+  ask_cv_.notify_all();
+}
+
+void Ui::ask_show(size_t idx) {
+  if (ask_idx_ < ask_qs_.size()) {  // keep the tab we leave as it was
+    auto& st = ask_st_[ask_idx_];
+    st.sel = pick_sel_;
+    st.marked = pick_marked_;
+    st.typed = input_;
+  }
+  ask_idx_ = idx;
+  if (idx < ask_qs_.size()) {
+    auto& st = ask_st_[idx];
+    pick_title_ = ask_qs_[idx].question;
+    pick_opts_ = ask_qs_[idx].opts;
+    pick_multi_ = ask_qs_[idx].multi;
+    pick_sel_ = st.sel;
+    if (st.marked.size() != pick_opts_.size()) st.marked.assign(pick_opts_.size(), false);
+    pick_marked_ = st.marked;
+    input_ = st.typed;
+  } else {  // Submit tab
+    pick_opts_.clear();
+    pick_multi_ = false;
+    pick_sel_ = 0;
+    input_.clear();
+  }
+  cursor_ = input_.size();
+}
+
+void Ui::ask_confirm() {
+  std::string a;
+  if (pick_multi_) {  // checked options, plus the typed answer if there is one
+    for (size_t i = 0; i < pick_opts_.size(); i++)
+      if (pick_marked_[i]) a += (a.empty() ? "" : ", ") + pick_opts_[i].label;
+    std::string own = util::trim(input_);
+    if (!own.empty()) a += (a.empty() ? "" : ", ") + own;
+    if (a.empty()) {
+      hint("check at least one, then Submit");
+      return;
+    }
+  } else if (on_own_row()) {
+    a = util::trim(input_);
+    if (a.empty()) {
+      hint("type your answer, or pick an option");
+      return;
+    }
+  } else if (pick_sel_ < pick_opts_.size()) {
+    a = pick_opts_[pick_sel_].label;
+  }
+  ask_st_[ask_idx_].answer = a;
+  size_t nq = ask_qs_.size();
+  if (nq == 1) {
+    pick_finish(0);
+    return;
+  }
+  ask_show(ask_idx_ + 1);  // the next question, or the Submit tab after the last
+}
+
+bool Ui::ask_key(int c) {
+  size_t nq = ask_qs_.size();
+  if (c == 0x03) {
+    pick_finish(-1);
+    return true;
+  }
+  if (c == '\t') {  // next tab; tabs do not wrap
+    if (nq > 1 && ask_idx_ < nq) {
+      ask_show(ask_idx_ + 1);
+      return true;
+    }
+    return true;
+  }
+  if (submit_tab()) {
+    if (c == '1' || c == '2') pick_sel_ = (size_t)(c - '1');
+    if (c == '\r' || c == '1' || c == '2') pick_finish(pick_sel_ == 0 ? 0 : -1);
+    return c != 0x1b;  // Esc still interrupts
+  }
+  if (c == '\r') {
+    if (pick_multi_ && pick_sel_ < pick_opts_.size())
+      pick_marked_[pick_sel_] = !pick_marked_[pick_sel_];  // Enter checks; Submit confirms
+    else
+      ask_confirm();
+    return true;
+  }
+  if (!on_own_row() && c >= '1' && c <= '9' && (size_t)(c - '1') < pick_rows()) {
+    pick_sel_ = (size_t)(c - '1');
+    if (on_own_row()) return true;  // now type the answer
+    if (on_submit_row()) {
+      ask_confirm();
+    } else if (pick_multi_) {
+      pick_marked_[pick_sel_] = !pick_marked_[pick_sel_];
+    } else {
+      ask_confirm();
+    }
+    return true;
+  }
+  if (pick_multi_ && c == ' ' && !on_own_row() && pick_sel_ < pick_opts_.size()) {
+    pick_marked_[pick_sel_] = !pick_marked_[pick_sel_];
+    return true;
+  }
+  // Anything else printable is the start of the user's own answer.
+  if (c >= 0x20 && c != 0x7f && !on_own_row()) pick_sel_ = pick_opts_.size();
+  return false;  // editing keys go to the input box
+}
+
+bool Ui::picker_key(int c) {
+  if (asking_) return ask_key(c);
+  return false;
+}
+
+// Draw the picker into `out` (top-down, one element per screen row) and set
+// pick_caret_line_/col_ to the typed row's caret (line index in `out`, -1 if none).
+void Ui::pick_lines(std::vector<std::string>& out, int C) {
+  pick_caret_line_ = -1;
+  pick_caret_col_ = 0;
+  const std::string dim = "\x1b[2m", bold = "\x1b[1m", blue = "\x1b[38;5;153m";
+  int W = std::max(10, C - 1);
+  auto clip = [&](const std::string& s) {  // cut to W columns on a rune boundary
+    if (render::display_width(render::strip_ansi(s)) <= W) return s + "\x1b[0m";
+    std::string plain = render::strip_ansi(s), keep;
+    for (size_t i = 0; i < plain.size();) {
+      size_t j = rune_after(plain, i);
+      if (render::display_width(keep + plain.substr(i, j - i)) > W - 1) break;
+      keep += plain.substr(i, j - i);
+      i = j;
+    }
+    return keep + "\xe2\x80\xa6\x1b[0m";
+  };
+  std::string rule;
+  for (int i = 0; i < C; i++) rule += "\xe2\x94\x80";
+  std::string color = asking_ ? "\x1b[38;5;240m" : "\x1b[38;5;75m";
+  out.push_back(color + rule + "\x1b[0m");
+
+  if (asking_ && ask_qs_.size() > 1) {  // ← ☐ Q1  ☐ Q2  ✓ Submit →
+    std::string tabs = dim + "\xe2\x86\x90\x1b[0m ";
+    for (size_t i = 0; i <= ask_qs_.size(); i++) {
+      bool last = i == ask_qs_.size();
+      std::string name = last ? "Submit"
+                              : (ask_qs_[i].header.empty()
+                                     ? "Q" + std::to_string(i + 1)
+                                     : ask_qs_[i].header);
+      std::string boxc = last
+                             ? "\x1b[38;5;141m\xe2\x9c\x93\x1b[0m"
+                             : (ask_st_[i].answer.empty() ? "\xe2\x98\x90" : "\xe2\x98\x92");
+      if (i == ask_idx_)
+        tabs += "\x1b[48;5;153m\x1b[38;5;16m " + render::strip_ansi(boxc) + " " + name + " \x1b[0m ";
+      else
+        tabs += " " + boxc + " " + name + "  ";
+    }
+    out.push_back(clip(tabs + dim + "\xe2\x86\x92"));
+    out.push_back("");
+  }
+
+  if (submit_tab()) {
+    out.push_back(clip(bold + "Review your answers"));
+    out.push_back("");
+    bool all = true;
+    for (size_t i = 0; i < ask_qs_.size(); i++) {
+      const std::string& a = ask_st_[i].answer;
+      if (a.empty()) {
+        all = false;
+        continue;
+      }
+      out.push_back(clip(" \xe2\x97\x8f " + ask_qs_[i].question));
+      out.push_back(clip("   " + blue + "\xe2\x86\x92 " + a));
+    }
+    if (!all) {
+      if (!out.back().empty()) out.push_back("");
+      out.push_back(clip("\x1b[38;5;220m\xe2\x9a\xa0 You have not answered all questions"));
+    }
+    out.push_back("");
+    out.push_back(clip(dim + "Ready to submit your answers?"));
+    out.push_back("");
+    const char* rows[] = {"Submit answers", "Cancel"};
+    for (size_t i = 0; i < 2; i++)
+      out.push_back(clip((i == pick_sel_ ? blue + "\xe2\x9d\xaf " : std::string("  ")) + dim +
+                         std::to_string(i + 1) + ".\x1b[0m " + (i == pick_sel_ ? blue : "") + rows[i]));
+  } else if (asking_) {
+    for (auto& l : wrap_plain(pick_title_, W)) out.push_back(clip(bold + l));
+    out.push_back("");
+    size_t n = pick_rows();
+    for (size_t i = 0; i < n; i++) {
+      bool sel = i == pick_sel_;
+      bool own = i == pick_opts_.size();
+      bool submit = i == pick_opts_.size() + 1;
+      std::string num = submit ? "   " : std::to_string(i + 1) + ".";
+      std::string boxc;
+      if (pick_multi_ && !submit)
+        boxc = (own ? !util::trim(input_).empty() : pick_marked_[i]) ? "[\xe2\x9c\x93] " : "[ ] ";
+      std::string lead = (sel ? blue + "\xe2\x9d\xaf\x1b[0m " : std::string("  ")) + dim + num +
+                         "\x1b[0m " + boxc;
+      int lead_w = render::display_width(render::strip_ansi(lead));  // strip ANSI first
+      if (own) {
+        // The "own answer" row is an editable line. Render it with wrap_input (the
+        // caret-safe wrapper the input box uses) and let the real terminal cursor
+        // sit in it; an inline inverse caret misaligns and desyncs the spacing.
+        std::vector<std::string> own_lines = wrap_input(input_, W - lead_w);
+        for (size_t k = 0; k < own_lines.size() && k < 3; k++) {
+          std::string text = own_lines[k];
+          if (input_.empty() && k == 0)
+            text += "\x1b[2mType something.";  // placeholder only when nothing typed
+          out.push_back(clip((k ? std::string((size_t)lead_w, ' ') : lead) + text));
+        }
+        if (sel && !own_lines.empty()) {
+          // Caret on the row the cursor byte falls in, at the column after it.
+          auto pre = wrap_input(input_.substr(0, cursor_), W - lead_w);
+          size_t cl = std::min(pre.size(), own_lines.size()) - 1;
+          pick_caret_line_ = (int)out.size() - (int)(own_lines.size()) + (int)cl;
+          int lead_plain = render::display_width(render::strip_ansi(lead));
+          pick_caret_col_ = lead_plain + render::display_width(pre.back());
+        }
+      } else {
+        std::string label = submit ? "Submit" : pick_opts_[i].label;
+        auto lw = wrap_plain(label, W - lead_w);
+        for (size_t k = 0; k < lw.size() && k < 3; k++) {
+          out.push_back(clip((k ? std::string((size_t)lead_w, ' ') : lead) +
+                             (sel ? blue : "") + lw[k]));
+        }
+      }
+      if (!own && !submit && !pick_opts_[i].desc.empty()) {
+        auto dw = wrap_plain(pick_opts_[i].desc, W - lead_w);
+        for (size_t k = 0; k < dw.size() && k < 3; k++)
+          out.push_back(clip(std::string((size_t)lead_w, ' ') + dim + dw[k]));
+      }
+    }
+  }
+  out.push_back("");
+  std::string help = asking_
+                         ? (on_own_row()
+                                ? "Type your answer \xc2\xb7 Enter to select \xc2\xb7 Ctrl-C to cancel"
+                                : "Enter to select \xc2\xb7 Tab/Arrows to navigate \xc2\xb7 Ctrl-C to cancel")
+                         : "Enter to select \xc2\xb7 Ctrl-C to cancel";
+  out.push_back(clip("\x1b[38;5;245m" + help));
+}
+
+std::vector<std::string> Ui::ask(const std::vector<Question>& qs) {
+  if (!interactive_) return {};  // headless: nothing to ask
+  std::unique_lock<std::mutex> lk(draw_mu_);
+  std::string saved = input_;  // a typed-ahead draft must not become the answer
+  size_t saved_cursor = cursor_;
+  ask_qs_ = qs;
+  ask_st_.assign(qs.size(), AskState{});
+  for (size_t i = 0; i < qs.size(); i++) ask_st_[i].marked.assign(qs[i].opts.size(), false);
+  asking_ = true;
+  ask_idx_ = qs.size();  // nothing to save yet
+  ask_show(0);
+  pick_result_ = -2;
+  picker_active_ = true;
+  hint_.clear();
+  status_override_ = "\x1b[38;5;220mwaiting for your answer\x1b[0m";
+  redraw();
+  while (pick_result_ == -2 && !util::interrupted())
+    ask_cv_.wait_for(lk, std::chrono::milliseconds(100));
+  picker_active_ = false;
+  asking_ = false;
+  status_override_.clear();
+  std::vector<std::string> answers;
+  if (pick_result_ >= 0) {
+    int C = term_cols();
+    for (size_t i = 0; i < qs.size(); i++) {
+      answers.push_back(ask_st_[i].answer);
+      Item it;
+      it.kind = 7;
+      it.raw = qs[i].question + "\t" + ask_st_[i].answer;
+      it.lines = render_item(7, it.raw, C);
+      items_.push_back(std::move(it));
+    }
+  }
+  pick_opts_.clear();
+  input_ = saved;
+  cursor_ = saved_cursor;
+  redraw();
+  return answers;
+}
+
+void Ui::answered(const std::string& question, const std::string& answer) {
+  if (!interactive_) return;
+  std::lock_guard<std::mutex> lk(draw_mu_);
+  Item it;
+  it.kind = 7;
+  it.raw = question + "\t" + answer;
+  it.lines = render_item(7, it.raw, term_cols());
+  items_.push_back(std::move(it));
+  redraw();
 }
 
 // --- Interactive input ---
@@ -1202,7 +1579,12 @@ bool Ui::apply_esc_bytes() {
       while (i < n && buf[i] != 0x1b) i++;
     } else if (buf[0] == '[') {
       char p = (char)buf[1]; i = 2;
-      if (p == 'A') scroll_up();
+      if ((p == 'A' || p == 'B') && picker_active_ && pick_rows() > 0) {
+        size_t n = pick_rows();  // Up/Down move the picker, not the transcript
+        pick_sel_ = p == 'A' ? (pick_sel_ + n - 1) % n : (pick_sel_ + 1) % n;
+        changed = true;
+      }
+      else if (p == 'A') scroll_up();
       else if (p == 'B') scroll_down();
       else if (p == 'D') back();
       else if (p == 'C') fwd();
@@ -1274,6 +1656,16 @@ Ui::PollResult Ui::handle_poll_byte(int c) {
   if (c == 0x03) {  // Ctrl-C: request a clean interrupt of the running turn
     util::request_interrupt();
     return PollResult::kCancel;
+  }
+  {
+    std::lock_guard<std::mutex> lk(draw_mu_);
+    if (picker_active_) {  // ask_user is waiting: keys answer the question
+      bool changed = picker_key(c);
+      if (!changed)
+        changed = apply_edit_key(c);  // editing the typed answer
+      redraw();
+      return PollResult::kRedraw;
+    }
   }
   if (c == 0x16) {  // Ctrl-V: paste clipboard (image -> attach, else text)
     ClipData clip = read_clipboard();

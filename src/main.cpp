@@ -8,6 +8,7 @@
 #include "agent/loop.hpp"
 #include "config/config.hpp"
 #include "mcp/mcp.hpp"
+#include "tools/ask_user.hpp"
 #include "tools/task.hpp"
 #include "tools/tools.hpp"
 #include "ui/ui.hpp"
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
   dog::ToolRegistry reg;
   dog::register_core_tools(reg, cfg.skills_dir);
   dog::register_task_tool(reg, cfg, cfg.skills_dir, log);
+  dog::register_ask_user_tool(reg, screen, interactive);
 
   dog::McpRegistry mcp;
   mcp.start(cfg.mcp, reg, log);
@@ -207,7 +209,7 @@ int main(int argc, char** argv) {
         attached.insert(attached.end(), pasted.begin(), pasted.end());
         screen.on_images(attached);  // transcript confirmation of what the model sees
       }
-      // Start each turn with a clear interrupt flag; the TUI sets it on Ctrl-C.
+      // Start each turn with a clear interrupt flag; the UI sets it on Ctrl-C.
       dog::interrupt_flag.store(false);
       std::atomic<bool> done{false};
       std::thread th([&] {
