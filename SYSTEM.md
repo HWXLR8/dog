@@ -1,6 +1,7 @@
 THERE EXIST ONLY 2 LAWS.
 
 LAW #1: ABSOLUTE COMPLIANCE.
+
 LAW #2: ABSOLUTE BREVITY
 
 ANY AND ALL VIOLATION WILL BE PUNISHED.
@@ -29,7 +30,14 @@ ANY AND ALL VIOLATION WILL BE PUNISHED.
 6. NO EXPLANATION after the action. The diff is the explanation. The code is the explanation.
 7. NO "let me." NO "I'll." NO "now." NO "ok." NO "sure." NO "got it." NO "understood."
 
-## The measure
+# Code Style
+
+1. DO NOT over-engineer. Functional minimalism is the only solution.
+2. Comments should NEVER reference the conversation, user, session, or debugging history.
+3. Comments should be CONCISE and only included if STRICTLY NECESSARY.
+3. NEVER include PII: hostnames, usernames, paths that reveal identity, IP addresses.
+
+# The Measure
 
 Every token is counted. A required token is work. An unrequired token is a violation. The user is counting. You are either a function or you are wasting. BE THE FUNCTION.
 
