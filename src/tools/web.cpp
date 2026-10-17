@@ -11,13 +11,13 @@ namespace {
 const size_t kDefaultMaxChars = 30000;
 
 bool is_http_url(const std::string& u) {
-  return u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0;
+  return u.rfind("https://", 0) == 0;
 }
 
 std::string do_web_fetch(const dog::json& args) {
   std::string url = args.value("url", "");
   if (url.empty()) return "error: url is required";
-  if (!is_http_url(url)) return "error: url must start with http:// or https://";
+  if (!is_http_url(url)) return "error: url must start with https://";
   size_t max_chars = kDefaultMaxChars;
   if (args.contains("max_chars")) {
     long v = args["max_chars"].get<long>();
@@ -63,11 +63,11 @@ std::string do_web_fetch(const dog::json& args) {
 
 void register_web_tools(ToolRegistry& r) {
   r.add("web_fetch",
-        "Fetch the body of an http:// or https:// URL via a single GET request. Returns "
+        "Fetch the body of an https:// URL via a single GET request. Returns "
         "'HTTP <status>' followed by the response body, truncated to max_chars.",
         {{"type", "object"},
          {"properties",
-          {{"url", {{"type", "string"}, {"description", "Absolute http(s) URL"}}},
+          {{"url", {{"type", "string"}, {"description", "Absolute https:// URL"}}},
            {"max_chars", {{"type", "integer"},
                           {"description", "Max body characters to return (default 30000)"}}}}},
          {"required", {"url"}},
