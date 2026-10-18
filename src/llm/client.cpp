@@ -43,8 +43,8 @@ void process_data_line(const std::string& payload, SseAcc* a) {
         if (a->on_text) (*a->on_text)(c);
       }
     }
-    if (d.contains("reasoning") && d["reasoning"].is_string()) {
-      std::string r = d["reasoning"].get<std::string>();
+    if (d.contains("reasoning_content") && d["reasoning_content"].is_string()) {
+      std::string r = d["reasoning_content"].get<std::string>();
       if (!r.empty() && a->on_reasoning) (*a->on_reasoning)(r);
     }
     if (d.contains("tool_calls") && d["tool_calls"].is_array()) {
