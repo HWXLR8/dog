@@ -20,9 +20,10 @@ dog::json ToolRegistry::tools_array(bool read_only_only) const {
   return arr;
 }
 
-std::string ToolRegistry::dispatch(const std::string& name, const dog::json& args) const {
+std::string ToolRegistry::dispatch(const std::string& name, const dog::json& args,
+                                   std::vector<ImagePart>* images) const {
   for (auto& e : entries_) {
-    if (e.name == name) return e.exec(args);
+    if (e.name == name) return e.exec(args, images);
   }
   return "error: unknown tool: " + name;
 }

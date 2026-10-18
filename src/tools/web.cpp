@@ -14,7 +14,7 @@ bool is_http_url(const std::string& u) {
   return u.rfind("https://", 0) == 0;
 }
 
-std::string do_web_fetch(const dog::json& args) {
+std::string do_web_fetch(const dog::json& args, std::vector<ImagePart>* images) {
   std::string url = args.value("url", "");
   if (url.empty()) return "error: url is required";
   if (!is_http_url(url)) return "error: url must start with https://";
@@ -32,7 +32,7 @@ std::string do_web_fetch(const dog::json& args) {
   if (status == 0) return "error: " + err;
 
   // If the server declares an image content type (or the magic bytes match),
-  // return the image as a tagged base64 payload so the model can see it.
+  // hand the raw bytes to the agent loop as an image part the model can see.
   std::string ctype;
   for (auto& h : raw_hdr) {
     std::string low;
@@ -48,8 +48,14 @@ std::string do_web_fetch(const dog::json& args) {
         mime = util::trim(t);
         break;
       }
-  if (!mime.empty())
-    return std::string("[image:") + mime + "]" + util::base64_encode(body);
+  if (!mime.empty() && images) {
+    ImagePart im;
+    im.mime = mime;
+    im.data = std::move(body);
+    im.path = url;
+    images->push_back(std::move(im));
+    return "[image attached]";
+  }
 
   std::string out = "HTTP " + std::to_string(status) + "\n";
   if (body.size() > max_chars)

@@ -1261,17 +1261,6 @@ std::vector<std::string> Ui::ask(const std::vector<Question>& qs) {
   return answers;
 }
 
-void Ui::answered(const std::string& question, const std::string& answer) {
-  if (!interactive_) return;
-  std::lock_guard<std::mutex> lk(draw_mu_);
-  Item it;
-  it.kind = 7;
-  it.raw = question + "\t" + answer;
-  it.lines = render_item(7, it.raw, term_cols());
-  items_.push_back(std::move(it));
-  redraw();
-}
-
 // --- Interactive input ---
 
 void Ui::user_message(const std::string& text) {

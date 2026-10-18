@@ -20,21 +20,25 @@ std::string read_whole(const std::string& path, std::string* err) {
 
 const size_t kMaxRead = 120000;
 
-std::string do_read_file(const dog::json& args) {
+std::string do_read_file(const dog::json& args, std::vector<ImagePart>* images) {
   std::string path = args.value("path", "");
   if (path.empty()) return "error: path is required";
   std::string err;
   std::string content = read_whole(path, &err);
   if (!err.empty()) return err;
 
-  // Images: return a tagged base64 payload so the model can see it. The agent
-  // loop detects the [image:...] tag, splits it out of the (text-only) tool
-  // message, and sends it as an OpenAI image_url part.
-  if (util::is_image_file(path)) {
+  // Images: hand the raw bytes to the agent loop as a side-channel ImagePart;
+  // the loop sends it to the model as an OpenAI image_url content part.
+  if (images && util::is_image_file(path)) {
     std::string mime = util::sniff_image_mime(content);
     if (mime.empty()) mime = util::mime_from_path(path);
     if (mime.empty()) mime = "image/png";
-    return std::string("[image:") + mime + "]" + util::base64_encode(content);
+    ImagePart im;
+    im.mime = mime;
+    im.data = std::move(content);
+    im.path = path;
+    images->push_back(std::move(im));
+    return "[image attached]";
   }
 
   std::vector<std::string> lines = util::split_lines(content);
@@ -57,7 +61,7 @@ std::string do_read_file(const dog::json& args) {
   return result;
 }
 
-std::string do_write_file(const dog::json& args) {
+std::string do_write_file(const dog::json& args, std::vector<ImagePart>*) {
   std::string path = args.value("path", "");
   if (path.empty()) return "error: path is required";
   std::string content;
@@ -69,7 +73,7 @@ std::string do_write_file(const dog::json& args) {
   return "OK: wrote " + std::to_string(content.size()) + " bytes to " + path;
 }
 
-std::string do_edit_file(const dog::json& args) {
+std::string do_edit_file(const dog::json& args, std::vector<ImagePart>*) {
   std::string path = args.value("path", "");
   std::string old_s = args.value("old_string", "");
   std::string new_s;

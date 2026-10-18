@@ -10,11 +10,9 @@ namespace dog {
 
 namespace {
 
-// Capture the current screen via `grim` (Wayland) and return it as the same
-// "[image:<mime>]<base64>" tag that read_file uses. grim writes the PNG to
-// stdout; we pipe it, base64-encode, and the agent loop inlines it as an
-// image_url part the model can see.
-std::string do_screenshot(const dog::json&) {
+// Capture the current screen via `grim` (Wayland) and hand the raw PNG bytes to
+// the agent loop as an image part (inlined as an image_url the model can see).
+std::string do_screenshot(const dog::json&, std::vector<ImagePart>* images) {
   int out_pipe[2];
   if (::pipe(out_pipe) != 0) return "error: pipe() failed";
 
@@ -50,7 +48,14 @@ std::string do_screenshot(const dog::json&) {
   if (code != 0 || png.empty())
     return "error: screenshot failed (grim exit " + std::to_string(code) + ")";
 
-  return std::string("[image:image/png]") + util::base64_encode(png);
+  if (images) {
+    ImagePart im;
+    im.mime = "image/png";
+    im.data = std::move(png);
+    im.path = "screenshot";
+    images->push_back(std::move(im));
+  }
+  return "[image attached]";
 }
 
 }  // namespace

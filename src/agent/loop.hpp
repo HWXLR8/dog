@@ -9,14 +9,6 @@
 
 namespace dog {
 
-// An image to be sent to the model as an OpenAI `image_url` content part.
-// `data` is raw image bytes (PNG/JPEG/...); the harness base64-encodes it.
-struct ImagePart {
-  std::string mime;  // e.g. "image/png"
-  std::string data;  // raw bytes
-  std::string path;  // source path, for display
-};
-
 // Builds the OpenAI `content` array for a message: a (optional) text part plus
 // image parts. Returns a single string when there are no images (common case).
 dog::json content_or_text(const std::string& text,
@@ -66,7 +58,7 @@ public:
 
 private:
   dog::json tools_for_model() const;
-  std::string dispatch_tool(const ToolCall& tc);
+  std::string dispatch_tool(const ToolCall& tc, std::vector<ImagePart>* images);
   std::string do_exit_plan_mode(const ToolCall& tc);
   // The single leading system message (base prompt + plan-mode rules when active).
   std::string current_system_message() const;

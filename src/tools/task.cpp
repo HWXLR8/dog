@@ -62,7 +62,7 @@ void register_task_tool(ToolRegistry& r, const Config& cfg, const std::string& s
          {"required", {"prompt"}},
          {"additionalProperties", false}},
         /*read_only=*/false,
-        [cfg, skills_dir, log](const dog::json& args) {
+        [cfg, skills_dir, log](const dog::json& args, std::vector<ImagePart>*) {
           return do_task(cfg, skills_dir, args, log);
         });
 }

@@ -91,7 +91,7 @@ void register_skills_tools(ToolRegistry& r, const std::string& skills_dir) {
          {"required", {"skill"}},
          {"additionalProperties", false}},
         /*read_only=*/true,
-        [captured = std::move(captured)](const dog::json& args) -> std::string {
+        [captured = std::move(captured)](const dog::json& args, std::vector<ImagePart>*) -> std::string {
           std::string name = args.value("skill", "");
           if (name.empty()) return "error: skill is required";
           for (const auto& s : captured)

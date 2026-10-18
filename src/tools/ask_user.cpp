@@ -43,7 +43,7 @@ void register_ask_user_tool(ToolRegistry& r, Ui& screen, bool interactive) {
         "question can use `question`/`options` directly.",
         params,
         /*read_only=*/true,
-        [&screen, interactive](const dog::json& a) -> std::string {
+        [&screen, interactive](const dog::json& a, std::vector<ImagePart>*) -> std::string {
           if (!interactive)
             return "No user is available (headless run). Choose the most sensible "
                    "option yourself and state the assumption in your answer.";

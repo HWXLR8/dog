@@ -354,7 +354,8 @@ void McpRegistry::start(const std::vector<McpServerConfig>& servers, ToolRegistr
       std::string desc = t.description.empty() ? ("MCP tool " + full) : t.description;
       bool ro = t.read_only;
       std::string server_tool = t.name;
-      reg.add(full, desc, schema, ro, [raw, server_tool](const dog::json& args) {
+      reg.add(full, desc, schema, ro, [raw, server_tool](const dog::json& args,
+                                                         std::vector<ImagePart>*) {
         bool is_err = false;
         std::string e;
         return raw->call_tool(server_tool, args, &is_err, &e);

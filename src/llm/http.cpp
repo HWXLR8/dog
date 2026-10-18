@@ -23,8 +23,7 @@ size_t header_cb(char* ptr, size_t size, size_t nmemb, void* ud) {
   auto* out = static_cast<std::vector<std::string>*>(ud);
   size_t n = size * nmemb;
   std::string line(ptr, n);
-  if (!line.empty() && line.back() == '\r') line.pop_back();
-  if (!line.empty() && line.back() == '\n') line.pop_back();
+  while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
   if (!line.empty()) out->push_back(line);
   return n;
 }
@@ -96,37 +95,16 @@ int finish(CURL* c, curl_slist* hdr, const TransferResult& tr, std::string* err)
   return (int)status;
 }
 
-}  // namespace
-
-int http_post(const std::string& url,
-              const std::map<std::string, std::string>& headers,
-              const std::string& body,
-              std::function<void(const char*, size_t)> on_chunk,
-              std::string* err) {
-  CURL* c = curl_easy_init();
-  if (!c) {
-    if (err) *err = "curl init failed";
-    return 0;
-  }
-  curl_slist* hdr = nullptr;
-  for (auto& [k, v] : headers) hdr = curl_slist_append(hdr, (k + ": " + v).c_str());
-
-  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_POST, 1L);
-  curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
-  curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
-  if (hdr) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdr);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_chunk);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, &on_chunk);
-  curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-
-  return finish(c, hdr, run_transfer(c), err);
-}
-
-int http_get(const std::string& url,
+// Single transfer implementation behind all four public functions.
+// on_chunk != null: stream body chunks (SSE); else accumulate into body_out.
+// timeout_s <= 0: no overall transfer timeout (connect timeout always 10s).
+int transfer(bool post, const std::string& url,
              const std::map<std::string, std::string>& headers,
-             std::string* body,
+             const std::string& body,
+             std::function<void(const char*, size_t)>* on_chunk,
+             std::string* body_out,
+             std::vector<std::string>* header_lines,
+             long timeout_s,
              std::string* err) {
   CURL* c = curl_easy_init();
   if (!c) {
@@ -135,16 +113,49 @@ int http_get(const std::string& url,
   }
   curl_slist* hdr = nullptr;
   for (auto& [k, v] : headers) hdr = curl_slist_append(hdr, (k + ": " + v).c_str());
+
   curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+  if (post) {
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
+  } else {
+    curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+  }
   if (hdr) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdr);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_vec);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, body);
+  if (on_chunk) {
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_chunk);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, on_chunk);
+  } else {
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_vec);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, body_out);
+  }
+  if (header_lines) {
+    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_cb);
+    curl_easy_setopt(c, CURLOPT_HEADERDATA, header_lines);
+  }
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(c, CURLOPT_TIMEOUT, 60L);
+  if (timeout_s > 0) curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_s);
 
   return finish(c, hdr, run_transfer(c), err);
+}
+
+}  // namespace
+
+int http_post(const std::string& url,
+              const std::map<std::string, std::string>& headers,
+              const std::string& body,
+              std::function<void(const char*, size_t)> on_chunk,
+              std::string* err) {
+  return transfer(true, url, headers, body, &on_chunk, nullptr, nullptr, -1, err);
+}
+
+int http_get(const std::string& url,
+             const std::map<std::string, std::string>& headers,
+             std::string* body,
+             std::string* err) {
+  return transfer(false, url, headers, std::string(), nullptr, body, nullptr, 60, err);
 }
 
 int http_post_ex(const std::string& url,
@@ -153,30 +164,7 @@ int http_post_ex(const std::string& url,
                  std::string* body_out,
                  std::vector<std::string>* header_lines,
                  std::string* err) {
-  CURL* c = curl_easy_init();
-  if (!c) {
-    if (err) *err = "curl init failed";
-    return 0;
-  }
-  curl_slist* hdr = nullptr;
-  for (auto& [k, v] : headers) hdr = curl_slist_append(hdr, (k + ": " + v).c_str());
-
-  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_POST, 1L);
-  curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
-  curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
-  if (hdr) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdr);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_vec);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, body_out);
-  if (header_lines) {
-    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_cb);
-    curl_easy_setopt(c, CURLOPT_HEADERDATA, header_lines);
-  }
-  curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
-
-  return finish(c, hdr, run_transfer(c), err);
+  return transfer(true, url, headers, body, nullptr, body_out, header_lines, 120, err);
 }
 
 int http_get_ex(const std::string& url,
@@ -184,27 +172,7 @@ int http_get_ex(const std::string& url,
                 std::string* body_out,
                 std::vector<std::string>* header_lines,
                 std::string* err) {
-  CURL* c = curl_easy_init();
-  if (!c) {
-    if (err) *err = "curl init failed";
-    return 0;
-  }
-  curl_slist* hdr = nullptr;
-  for (auto& [k, v] : headers) hdr = curl_slist_append(hdr, (k + ": " + v).c_str());
-  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
-  if (hdr) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdr);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb_vec);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, body_out);
-  if (header_lines) {
-    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_cb);
-    curl_easy_setopt(c, CURLOPT_HEADERDATA, header_lines);
-  }
-  curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(c, CURLOPT_TIMEOUT, 60L);
-
-  return finish(c, hdr, run_transfer(c), err);
+  return transfer(false, url, headers, std::string(), nullptr, body_out, header_lines, 60, err);
 }
 
 }  // namespace dog

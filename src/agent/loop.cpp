@@ -4,54 +4,6 @@
 
 namespace dog {
 
-namespace {
-
-// Extract the first image part encoded in a tool result as
-// "[image:<mime>]<base64>" (emitted by read_file / web_fetch for images).
-// Returns true and sets `out` when an image was found; the base64 payload is
-// base64-decoded back to raw bytes so the wire part carries a clean data: URI.
-inline std::string base64_decode(const std::string& in) {
-  auto val = [](char c) -> int {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-  };
-  std::string out;
-  out.reserve(in.size() * 3 / 4);
-  int acc = 0, bits = 0;
-  for (char c : in) {
-    if (c == '=' || c == '\n' || c == '\r') continue;
-    int v = val(c);
-    if (v < 0) continue;  // stray char (e.g. a stray space); skip
-    acc = (acc << 6) | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out += (char)((acc >> bits) & 0xFF);
-    }
-  }
-  return out;
-}
-
-bool image_from_result(const std::string& result, ImagePart* out) {
-  const char* tag = "[image:";
-  if (result.compare(0, 7, tag) != 0) return false;
-  size_t colon = result.find(':', 1);
-  if (colon == std::string::npos) return false;
-  size_t close = result.find(']', colon);
-  if (close == std::string::npos) return false;
-  std::string mime = result.substr(colon + 1, close - colon - 1);
-  std::string b64 = result.substr(close + 1);
-  out->mime = mime;
-  out->data = base64_decode(b64);
-  return !out->data.empty();
-}
-
-}  // namespace
-
 dog::json content_or_text(const std::string& text,
                                const std::vector<ImagePart>& images) {
   if (images.empty()) return dog::json(text);
@@ -264,7 +216,7 @@ std::string AgentLoop::do_exit_plan_mode(const ToolCall& tc) {
   return "The user rejected the plan. Revise it and call exit_plan_mode again.";
 }
 
-std::string AgentLoop::dispatch_tool(const ToolCall& tc) {
+std::string AgentLoop::dispatch_tool(const ToolCall& tc, std::vector<ImagePart>* images) {
   if (tc.name == "enter_plan_mode") {
     enter_plan_mode();
     return "Entered plan mode.";
@@ -279,7 +231,7 @@ std::string AgentLoop::dispatch_tool(const ToolCall& tc) {
   } catch (...) {
     args = dog::json::object();
   }
-  return reg_->dispatch(tc.name, args);
+  return reg_->dispatch(tc.name, args, images);
 }
 
 void AgentLoop::clear_context() {
@@ -376,17 +328,10 @@ bool AgentLoop::run_turn(const std::string& user_input,
         if (ui_.system) ui_.system("(interrupted)");
         return false;
       }
-      std::string result = util::sanitize_binary(dispatch_tool(tc));
+      std::string result =
+          util::sanitize_binary(dispatch_tool(tc, &pending_images));
       if (ui_.tool_call) ui_.tool_call(tc.name, tc.args_json, result);
-      ImagePart im;
-      std::string stored = result;
-      if (image_from_result(result, &im)) {
-        pending_images.push_back(std::move(im));
-        // The image is delivered as its own image_url part below; keep the
-        // (text-only) tool message small by dropping the raw base64 payload.
-        stored = "[image attached; see the image in the next message]";
-      }
-      messages_.push_back({{"role", "tool"}, {"tool_call_id", tc.id}, {"content", stored}});
+      messages_.push_back({{"role", "tool"}, {"tool_call_id", tc.id}, {"content", result}});
     }
     if (!pending_images.empty()) {
       if (ui_.images) ui_.images(pending_images);

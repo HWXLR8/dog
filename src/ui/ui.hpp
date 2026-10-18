@@ -58,9 +58,6 @@ public:
   // interrupted. `qs` are the questions; returns one answer each, or an empty
   // vector if interrupted. Non-interactive runs return an empty vector.
   std::vector<std::string> ask(const std::vector<Question>& qs);
-  // Record an answered question in the transcript as "· question → answer".
-  void answered(const std::string& question, const std::string& answer);
-
   // --- Interactive-only. ---
   void user_message(const std::string& text);  // record a submitted user line
   // Drains (and clears) any images attached to the current line via Ctrl-V.

@@ -83,7 +83,7 @@ std::vector<std::string> collect_files(const std::string& root) {
   return out;
 }
 
-std::string do_glob(const dog::json& args) {
+std::string do_glob(const dog::json& args, std::vector<ImagePart>*) {
   std::string pattern = args.value("pattern", "");
   std::string base = args.value("path", std::string("."));
   if (pattern.empty()) return "error: pattern is required";
@@ -106,7 +106,7 @@ std::string do_glob(const dog::json& args) {
   return r;
 }
 
-std::string do_grep(const dog::json& args) {
+std::string do_grep(const dog::json& args, std::vector<ImagePart>*) {
   std::string pattern = args.value("pattern", "");
   std::string path = args.value("path", std::string("."));
   std::string glob_filter;
