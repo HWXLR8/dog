@@ -1441,6 +1441,9 @@ bool Ui::apply_edit_key(int c) {
   } else if (c == 0x0e) {  // Ctrl-N: history down (newer)
     history_nav(+1);
     return true;
+  } else if (c == 0x0c) {  // Ctrl-L: snap back to the bottom of the transcript
+    scroll_offset_ = 0;
+    return true;
   } else if (c == 0x0f) {  // Ctrl-O: toggle thinking visibility
     show_reasoning_ = !show_reasoning_;
     int C = term_cols();
