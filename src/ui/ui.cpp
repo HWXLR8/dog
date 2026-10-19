@@ -1281,6 +1281,7 @@ void Ui::user_message(const std::string& text) {
   live_out_est_ = 0;
   input_.clear();
   cursor_ = 0;
+  scroll_offset_ = 0;
   redraw();
 }
 
