@@ -328,6 +328,7 @@ bool AgentLoop::run_turn(const std::string& user_input,
         if (ui_.system) ui_.system("(interrupted)");
         return false;
       }
+      if (ui_.tool_start) ui_.tool_start(tc.name, tc.args_json);
       std::string result =
           util::sanitize_binary(dispatch_tool(tc, &pending_images));
       if (ui_.tool_call) ui_.tool_call(tc.name, tc.args_json, result);

@@ -34,6 +34,7 @@ public:
   void on_reasoning(const std::string& chunk);
   void on_model_start();
   void on_round_end();
+  void on_tool_start(const std::string& name, const std::string& args);
   void on_tool_call(const std::string& name, const std::string& args, const std::string& result);
   void on_system(const std::string& msg);
   void on_usage(long in, long out, long total);

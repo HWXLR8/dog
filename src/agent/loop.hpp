@@ -17,6 +17,8 @@ dog::json content_or_text(const std::string& text,
 // Hooks the UI uses to render the agent as it runs.
 struct UiCallbacks {
   std::function<void(const std::string&)> text;  // streamed assistant text chunk
+  std::function<void(const std::string&, const std::string&)>
+      tool_start;  // (tool name, arg json) fires before tool runs
   std::function<void(const std::string&, const std::string&, const std::string&)>
       tool_call;  // (tool name, arg json, result)
   std::function<void(const std::string&)> system;  // one-line notice

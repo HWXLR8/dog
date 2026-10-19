@@ -817,6 +817,11 @@ void Ui::on_turn_end() {
   if (interactive_) redraw();
 }
 
+void Ui::on_tool_start(const std::string& name, const std::string& args) {
+  std::lock_guard<std::mutex> lk(draw_mu_);
+  if (interactive_) redraw();
+}
+
 void Ui::on_tool_call(const std::string& name, const std::string& args, const std::string& result) {
   std::lock_guard<std::mutex> lk(draw_mu_);
   int C = term_cols();

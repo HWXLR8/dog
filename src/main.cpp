@@ -157,6 +157,9 @@ int main(int argc, char** argv) {
   ui.usage = [&screen](long a, long b, long c) { screen.on_usage(a, b, c); };
   ui.status = [&screen](const std::string& s) { screen.on_status(s); };
   ui.images = [&screen](const std::vector<dog::ImagePart>& imgs) { screen.on_images(imgs); };
+  ui.tool_start = [&screen](const std::string& n, const std::string& a) {
+    screen.on_tool_start(n, a);
+  };
   ui.tool_call = [&screen](const std::string& n, const std::string& a, const std::string& r) {
     screen.on_tool_call(n, a, r);
   };
