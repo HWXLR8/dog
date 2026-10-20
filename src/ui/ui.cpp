@@ -550,7 +550,7 @@ std::string Ui::status_string() const {
   std::string left;
   if (!status_override_.empty()) {
     left = status_override_;  // explicit transient status (e.g. compaction) wins
-  } else if (working_ && !answer_started_) {
+  } else if (working_) {
     long el = std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - think_start_)
                    .count();
